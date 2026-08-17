@@ -38,6 +38,41 @@ describe("payment failure normalization", () => {
     expect(normalizePaymentFailure({ status: "failed", error_code: "unrecognized_code" })).toBe("unknown");
   });
 
+  it.each([
+    [{ error_details: { connector_details: { code: "insufficient_funds", message: "private" } } }, "insufficient_funds"],
+    [{ error_details: { issuer_details: { code: "lost_card", message: "private" } } }, "card_unavailable"],
+    [{ issuer_error_code: "invalid_cvv", issuer_error_message: "private" }, "invalid_cvv"],
+    [{ error_details: { unified_details: { standardized_code: "INVALID_EXPIRY_DATE" } } }, "invalid_card"],
+  ])("reads documented structured error layers", (providerResponse, expected) => {
+    expect(normalizePaymentFailure(providerResponse)).toBe(expected);
+  });
+
+  it("uses the latest timestamped attempt as authoritative", () => {
+    expect(normalizePaymentFailure({
+      status: "failed",
+      error_code: "insufficient_funds",
+      attempts: [
+        { attempt_id: "first", modified_at: "2026-08-17T10:00:00Z", error_code: "lost_card" },
+        { attempt_id: "second", modified_at: "2026-08-17T10:01:00Z", error_details: { connector_details: { code: "invalid_cvv" } } },
+      ],
+    })).toBe("invalid_cvv");
+  });
+
+  it.each([
+    [{ error_details: { unified_details: { standardised_code: "INSUFFICIENT_FUNDS" } } }, "insufficient_funds"],
+    [{ error_details: { connector_details: { code: "do_not_honor" } } }, "card_declined"],
+    [{ error_details: { issuer_details: { code: "stolen_card" } } }, "card_unavailable"],
+  ])("normalizes documented fields on the authoritative attempt", (attempt, expected) => {
+    expect(normalizePaymentFailure({ status: "failed", attempts: [{ attempt_id: "latest", ...attempt }] })).toBe(expected);
+  });
+
+  it("falls back safely for malformed attempts and ambiguous sandbox codes", () => {
+    expect(normalizePaymentFailure({ status: "failed", attempts: { error_code: "insufficient_funds" } })).toBe("unknown");
+    expect(normalizePaymentFailure({ status: "failed", attempts: [null, "bad", []] })).toBe("unknown");
+    expect(normalizePaymentFailure({ status: "failed", error_code: "DC_08", unified_code: "UE_9000" })).toBe("unknown");
+    expect(normalizePaymentFailure({ status: "failed", attempts: [{ error_code: "DC_08", unified_code: "UE_9000" }] })).toBe("unknown");
+  });
+
   it("limits the public status lookup to the normalized failure field", () => {
     expect(paymentStatusSource).toContain('from("payment_attempts").select("failure_reason")');
     expect(paymentStatusSource).not.toMatch(/error_code|error_message|payment_method_id|client_secret|error_details|payment_events/);

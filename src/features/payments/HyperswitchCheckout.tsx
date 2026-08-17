@@ -3,12 +3,21 @@ import { loadHyper } from "@juspay-tech/hyper-js";
 import { HyperElements, PaymentElement, useHyper, useWidgets } from "@juspay-tech/react-hyper-js";
 import { AlertCircle, LockKeyhole } from "lucide-react";
 import { track } from "../../lib/analytics";
+import { checkoutFailureMessage, classifyCheckoutFailure, resultRequiresSdkRedirect } from "../../lib/paymentFailure";
+import { supabase } from "../../lib/supabase";
 
 const hyperPromise = loadHyper(import.meta.env.VITE_HYPERSWITCH_PUBLISHABLE_KEY, {
   customBackendUrl: import.meta.env.VITE_HYPERSWITCH_BASE_URL ?? "https://sandbox.hyperswitch.io",
 });
 
-function CheckoutForm({ donationId, statusToken, managementToken }: { donationId: string; statusToken: string; managementToken?: string }) {
+interface CheckoutFormProps {
+  donationId: string;
+  statusToken: string;
+  managementToken?: string;
+  continueToStatus?: () => void;
+}
+
+export function CheckoutForm({ donationId, statusToken, managementToken, continueToStatus }: CheckoutFormProps) {
   const hyper = useHyper();
   const widgets = useWidgets();
   const [processing, setProcessing] = useState(false);
@@ -22,15 +31,29 @@ function CheckoutForm({ donationId, statusToken, managementToken }: { donationId
     sessionStorage.setItem(`missionpay:donation:${donationId}`, statusToken);
     if (managementToken) sessionStorage.setItem(`missionpay:management:${donationId}`, managementToken);
     track("payment_submitted", { donation_id: donationId });
-    const result = await hyper.confirmPayment({
-      elements: widgets,
-      confirmParams: { return_url: `${window.location.origin}/donation/${donationId}/success` },
-      redirect: "always",
-    });
-    if (result?.error) {
-      setMessage(result.error.message ?? "Your payment could not be completed. Check the payment details and try again.");
+    const statusUrl = `${window.location.origin}/donation/${donationId}/success`;
+    try {
+      const result = await hyper.confirmPayment({
+        elements: widgets,
+        confirmParams: { return_url: statusUrl },
+        redirect: "if_required",
+      });
+      if ("error" in result && result.error) {
+        const reason = classifyCheckoutFailure(result);
+        setMessage(checkoutFailureMessage(result));
+        setProcessing(false);
+        track("payment_failed", { donation_id: donationId, failure_reason: reason });
+        void supabase.functions.invoke("payment-status", { body: { donation_id: donationId, status_token: statusToken } }).catch(() => undefined);
+        return;
+      }
+      if (resultRequiresSdkRedirect(result)) return;
+      (continueToStatus ?? (() => window.location.assign(statusUrl)))();
+    } catch {
+      const reason = "technical_error" as const;
+      setMessage(checkoutFailureMessage({ error: { code: reason } }));
       setProcessing(false);
-      track("payment_failed", { donation_id: donationId });
+      track("payment_failed", { donation_id: donationId, failure_reason: reason });
+      void supabase.functions.invoke("payment-status", { body: { donation_id: donationId, status_token: statusToken } }).catch(() => undefined);
     }
   };
 

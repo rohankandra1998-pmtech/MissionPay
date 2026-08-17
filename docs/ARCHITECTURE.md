@@ -40,8 +40,9 @@ Supabase Cron + pg_net
 - Route-level lazy loading keeps fundraiser and payment SDK code out of the first landing-page chunk.
 - Supabase publishable keys are the only Supabase keys available to browser code.
 - The donation flow collects no card data. The official Hyperswitch `PaymentElement` renders the secure payment UI.
-- Donation confirmation polls the `payment-status` function with a random status token stored only in the browser session. It does not trust redirect query parameters.
-- Failed confirmations render from a MissionPay-owned normalized reason. They never render connector or issuer messages.
+- Unified Checkout uses `redirect: "if_required"`. The SDK owns required redirects/3DS; direct no-error results go to MissionPay's status route, where success is decided exclusively from reconciled backend state.
+- Immediate SDK errors stay inline and trigger a best-effort background `payment-status` reconciliation using the random status token stored only in the browser session. That sync never blocks a retry, and redirect query parameters are not trusted.
+- Failed confirmations render from a MissionPay-owned normalized reason. Client analytics contain only donation ID plus the safe taxonomy; browser and status views never render connector, issuer, risk, or arbitrary SDK messages.
 - The fundraiser dashboard derives totals from rows returned under RLS; it does not contain demo financial constants.
 
 ## Database relationships
@@ -56,7 +57,7 @@ auth.users 1──1 fundraisers 1──* campaigns 1──* donations *──1 d
 
 `campaign_metrics` and `public_supporter_activity` are projection tables maintained by internal trigger functions. They expose safe, fast public reads while their values remain derived from `donations.status = 'succeeded'` and active recurring plans.
 
-`payment_attempts.failure_reason` is a constrained, provider-neutral classification written during reconciliation. Raw provider diagnostics remain backend-only; the capability-protected status endpoint selects only this normalized field for failed or cancelled donations and falls back to `unknown` for historical attempts.
+`payment_attempts.failure_reason` is a constrained, provider-neutral classification written during reconciliation. The normalizer reads documented unified, connector, issuer, and expanded attempt-level machine fields; the newest timestamped attempt is authoritative. Ambiguous `UE_9000` and `DC_08` remain `unknown`. Raw provider diagnostics remain backend-only; the capability-protected status endpoint selects only this normalized field for failed or cancelled donations and falls back to `unknown` for historical attempts.
 
 `donation_email_deliveries` is a backend-only outbox. The donation trigger inserts one row when a donation is inserted as `succeeded` or transitions into `succeeded`; migration installation does not touch historical rows. A unique `(donation_id, notification_type)` key makes repeated reconciliation idempotent. The worker claim RPC uses `FOR UPDATE SKIP LOCKED`, marks rows `sending`, and reclaims abandoned work after ten minutes. Once a row is `sent`, it is never automatically claimed again.
 
@@ -117,6 +118,8 @@ The schema already supports `refunded` donations and arbitrary payment event typ
 - [Hyperswitch recurring payment flows](https://api-reference.hyperswitch.io/v1/payments/payment--flows)
 - [Hyperswitch webhook verification](https://docs.hyperswitch.io/explore-hyperswitch/payment-orchestration/quickstart/webhooks)
 - [Hyperswitch unified error codes](https://api-reference.hyperswitch.io/essentials/error_codes)
+- [Hyperswitch payment retrieve fields and expanded attempts](https://api-reference.hyperswitch.io/v1/payments/payments--retrieve)
+- [Hyperswitch React SDK `confirmPayment`](https://docs.hyperswitch.io/learn-more/sdk-reference/react)
 - [Hyperswitch dummy connector test payments](https://docs.hyperswitch.io/explore-hyperswitch/payment-flows-and-management/quickstart/connectors/test-a-payment-with-connector)
 - [Supabase scheduled Edge Functions](https://supabase.com/docs/guides/functions/schedule-functions)
 - [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security)

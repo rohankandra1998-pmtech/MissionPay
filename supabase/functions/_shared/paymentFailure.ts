@@ -81,27 +81,64 @@ function code(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function timestamp(value: unknown) {
+  const parsed = Date.parse(code(value));
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function authoritativeAttempt(value: unknown): Record<string, unknown> {
+  if (!Array.isArray(value)) return {};
+  const attempts = value.map(record).filter((attempt) => Object.keys(attempt).length > 0);
+  if (!attempts.length) return {};
+  return attempts.reduce((latest, attempt) => {
+    const latestTime = Math.max(timestamp(latest.modified_at), timestamp(latest.updated_at), timestamp(latest.created_at));
+    const attemptTime = Math.max(timestamp(attempt.modified_at), timestamp(attempt.updated_at), timestamp(attempt.created_at));
+    return attemptTime >= latestTime ? attempt : latest;
+  });
+}
+
+function machineCodeReason(value: unknown) {
+  const normalized = code(value).toLowerCase();
+  if (!normalized || normalized === "ue_9000" || normalized === "dc_08") return null;
+  return legacyCodes[normalized] ?? standardisedCodes[normalized.toUpperCase()] ?? null;
+}
+
+function reasonFromSource(source: Record<string, unknown>): PaymentFailureReason | null {
+  const errorDetails = record(source.error_details);
+  const unifiedDetails = record(errorDetails.unified_details);
+  const connectorDetails = record(errorDetails.connector_details);
+  const issuerDetails = record(errorDetails.issuer_details);
+  const candidates = [
+    unifiedDetails.standardised_code,
+    unifiedDetails.standardized_code,
+    source.unified_code,
+    connectorDetails.code,
+    source.error_code,
+    issuerDetails.code,
+    source.issuer_error_code,
+  ];
+  for (const candidate of candidates) {
+    const reason = machineCodeReason(candidate);
+    if (reason) return reason;
+  }
+
+  const category = code(unifiedDetails.category || source.unified_code).toUpperCase();
+  if (["UE_2000", "UE_3000", "UE_4000"].includes(category)) return "technical_error";
+
+  const providerStatus = code(source.status).toLowerCase();
+  if (providerStatus === "authentication_failed") return "authentication_failed";
+  if (["cancelled", "voided"].includes(providerStatus) && code(source.cancellation_reason).toLowerCase() === "requested_by_customer") return "payment_cancelled";
+  return null;
+}
+
 export function isPaymentFailureReason(value: unknown): value is PaymentFailureReason {
   return typeof value === "string" && PAYMENT_FAILURE_REASONS.includes(value as PaymentFailureReason);
 }
 
 export function normalizePaymentFailure(providerPayment: Record<string, unknown>): PaymentFailureReason {
-  const errorDetails = record(providerPayment.error_details);
-  const unifiedDetails = record(errorDetails.unified_details);
-  const standardised = code(unifiedDetails.standardised_code || unifiedDetails.standardized_code).toUpperCase();
-  if (standardisedCodes[standardised]) return standardisedCodes[standardised];
-
-  const unifiedCode = code(providerPayment.unified_code).toUpperCase();
-  if (standardisedCodes[unifiedCode]) return standardisedCodes[unifiedCode];
-
-  const category = code(unifiedDetails.category || unifiedCode).toUpperCase();
-  if (["UE_2000", "UE_3000", "UE_4000"].includes(category)) return "technical_error";
-
-  const connectorCode = code(providerPayment.error_code).toLowerCase();
-  if (legacyCodes[connectorCode]) return legacyCodes[connectorCode];
-
-  const providerStatus = code(providerPayment.status).toLowerCase();
-  if (providerStatus === "authentication_failed") return "authentication_failed";
-  if (["cancelled", "voided"].includes(providerStatus) && code(providerPayment.cancellation_reason).toLowerCase() === "requested_by_customer") return "payment_cancelled";
+  const attemptReason = reasonFromSource(authoritativeAttempt(providerPayment.attempts));
+  if (attemptReason) return attemptReason;
+  const topLevelReason = reasonFromSource(providerPayment);
+  if (topLevelReason) return topLevelReason;
   return "unknown";
 }

@@ -28,7 +28,9 @@ export function createPayment(input: Record<string, unknown>) {
 }
 
 export function retrievePayment(paymentId: string, forceSync = false) {
-  return request(`/payments/${encodeURIComponent(paymentId)}${forceSync ? "?force_sync=true" : ""}`, { method: "GET" });
+  const query = new URLSearchParams({ expand_attempts: "true" });
+  if (forceSync) query.set("force_sync", "true");
+  return request(`/payments/${encodeURIComponent(paymentId)}?${query.toString()}`, { method: "GET" });
 }
 
 export function missionPayStatus(providerStatus: string) {

@@ -10,9 +10,10 @@ MissionPay donation states are centralized as `pending → processing → succee
 2. `create-payment` validates the amount, USD currency, campaign state, and donor fields.
 3. It creates a donor, a pending donation, a random confirmation capability, and a payment attempt.
 4. The function creates a Hyperswitch payment server-side with automatic capture and returns only the payment ID, `client_secret`, donation ID, and opaque status token.
-5. Unified Checkout collects payment details directly inside Hyperswitch-controlled UI.
-6. The result is reconciled by a verified webhook and, as a recovery path, by `payment-status` retrieving the provider payment with `force_sync=true`.
-7. Only `succeeded` donation rows affect metrics.
+5. Unified Checkout collects payment details directly inside Hyperswitch-controlled UI. Confirmation uses `redirect: "if_required"`: redirect and 3DS methods stay SDK-controlled, while direct methods return control to MissionPay.
+6. An immediate SDK error remains on the payment step, is mapped to MissionPay-owned copy, and starts a non-blocking `payment-status` sync with the donation's capability token. A direct result without an error navigates to the status route regardless of its SDK status; the browser never declares success.
+7. The result is reconciled by a verified webhook and, as a recovery path, by `payment-status` retrieving the provider payment with `force_sync=true&expand_attempts=true`.
+8. Only `succeeded` donation rows affect metrics.
 
 ## Monthly CIT and setup
 
@@ -63,8 +64,11 @@ The database unique donation/type key, atomic `FOR UPDATE SKIP LOCKED` claim, an
 ## Failure and retry
 
 - A create-payment failure marks the internal donation failed and tells the donor no charge was made.
-- An immediate checkout error remains on the payment step with human-readable provider-safe text.
-- Reconciliation maps Hyperswitch's unified `error_details.unified_details.standardised_code` into MissionPay's constrained `failure_reason` taxonomy. Exact connector machine codes are a legacy fallback; provider message text is never parsed.
+- An immediate checkout error remains on the payment step with MissionPay-owned reason copy. The client prefers exact machine fields, permits only a narrow allowlist of documented Dummy connector scenario labels when the SDK exposes no code, never renders or persists raw messages, and emits only the normalized taxonomy in analytics.
+- Reconciliation maps Hyperswitch's unified, connector, issuer, and authoritative latest-attempt machine fields into MissionPay's constrained `failure_reason` taxonomy. Expanded attempts are ordered by their documented modification/creation timestamps, with the last valid array entry as a safe tie fallback. Provider message text is never parsed.
+- The exact server inputs are `error_details.unified_details.standardised_code` (plus the API's `standardized_code` compatibility spelling), `error_details.unified_details.category`, `unified_code`, `error_details.connector_details.code`, `error_code`, `error_details.issuer_details.code`, `issuer_error_code`, `status`, and `cancellation_reason`; the same documented fields are inspected on the authoritative expanded attempt. Within a source, standardized interpretation precedes connector/issuer fallbacks. The authoritative attempt precedes top-level last-attempt mirrors because retries can leave older top-level compatibility fields.
+- In the installed `@juspay-tech/hyper-js` 2.1.0 contract, an immediate error formally exposes `error.type` and `error.message`, while a direct successful response exposes top-level `status` and optional `next_action`. MissionPay narrows any runtime machine-code additions defensively; `next_action` redirect signals stay SDK-owned, and every no-error direct status goes to backend reconciliation.
+- `UE_9000` by itself remains `unknown`. `DC_08` is not assigned a global meaning; a connector-specific adapter requires repeatable multi-scenario sandbox evidence before it can be introduced.
 - The public `payment-status` response returns only the normalized reason (`insufficient_funds`, `card_declined`, `card_unavailable`, `authentication_failed`, `invalid_cvv`, `expired_card`, `invalid_card`, `payment_cancelled`, `session_expired`, `technical_error`, or `unknown`). It never returns raw error messages, risk/fraud details, payment-method references, client secrets, or event payloads.
 - A terminal failed status never changes campaign metrics and offers safe, reason-specific guidance plus a direct route to restart checkout. Unknown and previously exhausted attempts use the generic fallback and are not requeued.
 - A processing status continues polling without presenting success.
