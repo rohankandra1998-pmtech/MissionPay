@@ -19,14 +19,16 @@ export type DonationConfirmationMessage = {
   text: string;
 };
 
-type ResendConfig = {
+type TransactionalEmailConfig = {
   apiKey: string;
-  from: string;
+  senderName: string;
+  senderAddress: string;
   replyTo?: string;
 };
 
 type SendRequest = {
   to: string;
+  toName: string;
   message: DonationConfirmationMessage;
   idempotencyKey: string;
 };
@@ -118,39 +120,60 @@ function validateServerHeader(value: string, label: string) {
   if (!value.trim() || /[\r\n]/.test(value)) throw new EmailConfigurationError(`${label}_invalid`);
 }
 
+function safeHeaderValue(value: string) {
+  return value.replace(/[\r\n]+/g, " ").trim().slice(0, 250);
+}
+
+function validateUuid(value: string, label: string) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    throw new EmailConfigurationError(`${label}_invalid`);
+  }
+}
+
 export async function sendDonationConfirmation(
-  config: ResendConfig,
+  config: TransactionalEmailConfig,
   request: SendRequest,
   fetcher: typeof fetch = fetch,
 ) {
-  if (!config.apiKey) throw new EmailConfigurationError("resend_api_key_missing");
-  validateServerHeader(config.from, "email_from");
+  if (!config.apiKey) throw new EmailConfigurationError("brevo_api_key_missing");
+  validateServerHeader(config.senderName, "email_from_name");
+  validateServerHeader(config.senderAddress, "email_from_address");
   if (config.replyTo) validateServerHeader(config.replyTo, "email_reply_to");
+  validateServerHeader(request.to, "email_recipient");
+  validateUuid(request.idempotencyKey, "brevo_idempotency_key");
 
-  const response = await fetcher("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-      "Idempotency-Key": request.idempotencyKey,
-    },
-    body: JSON.stringify({
-      from: config.from,
-      to: [request.to],
-      subject: request.message.subject,
-      html: request.message.html,
-      text: request.message.text,
-      ...(config.replyTo ? { reply_to: config.replyTo } : {}),
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetcher("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "api-key": config.apiKey,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sender: { name: config.senderName, email: config.senderAddress },
+        to: [{ email: request.to, name: safeHeaderValue(request.toName) }],
+        subject: request.message.subject,
+        htmlContent: request.message.html,
+        textContent: request.message.text,
+        headers: { idempotencyKey: request.idempotencyKey },
+        ...(config.replyTo ? { replyTo: { email: config.replyTo } } : {}),
+      }),
+    });
+  } catch {
+    throw new EmailProviderError(true, "brevo_network_error");
+  }
 
   if (!response.ok) {
-    const code = `resend_http_${response.status}`;
+    const code = `brevo_http_${response.status}`;
     throw new EmailProviderError(response.status === 408 || response.status === 429 || response.status >= 500, code);
   }
-  const payload = await response.json().catch(() => ({})) as { id?: unknown };
-  if (typeof payload.id !== "string" || !payload.id) throw new EmailProviderError(true, "resend_response_invalid");
-  return { providerMessageId: payload.id };
+  const payload = await response.json().catch(() => ({})) as { messageId?: unknown };
+  if (typeof payload.messageId !== "string" || !payload.messageId) {
+    throw new EmailProviderError(true, "brevo_response_invalid");
+  }
+  return { providerMessageId: payload.messageId };
 }
 
 export function safeDeliveryError(error: unknown) {
@@ -159,9 +182,11 @@ export function safeDeliveryError(error: unknown) {
 }
 
 export function failedDeliveryUpdate(attemptCount: number, error: unknown, now = Date.now()) {
+  const retryable = error instanceof EmailProviderError ? error.retryable : !(error instanceof EmailConfigurationError);
   const retryMinutes = Math.min(60, 2 ** Math.max(0, attemptCount - 1) * 5);
   return {
     status: "failed" as const,
+    ...(!retryable ? { attempt_count: 5 } : {}),
     next_attempt_at: new Date(now + retryMinutes * 60_000).toISOString(),
     last_error: safeDeliveryError(error),
   };

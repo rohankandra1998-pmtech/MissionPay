@@ -31,7 +31,7 @@ Supabase Cron + pg_net
   └─ process-donation-emails
        ├─ atomically claims a bounded internal outbox batch
        ├─ reads minimal confirmed MissionPay business data
-       └─ sends HTML + text confirmation ───────────> Resend
+       └─ sends HTML + text confirmation ───────────> Brevo Transactional Email API
 ```
 
 ## Frontend
@@ -55,7 +55,9 @@ auth.users 1──1 fundraisers 1──* campaigns 1──* donations *──1 d
 
 `campaign_metrics` and `public_supporter_activity` are projection tables maintained by internal trigger functions. They expose safe, fast public reads while their values remain derived from `donations.status = 'succeeded'` and active recurring plans.
 
-`donation_email_deliveries` is a backend-only outbox. The donation trigger inserts one row when a donation is inserted as `succeeded` or transitions into `succeeded`; migration installation does not touch historical rows. A unique `(donation_id, notification_type)` key makes repeated reconciliation idempotent. The worker claim RPC uses `FOR UPDATE SKIP LOCKED`, marks rows `sending`, and reclaims abandoned work after ten minutes. Resend receives a stable provider idempotency key as a second duplicate-send guard.
+`donation_email_deliveries` is a backend-only outbox. The donation trigger inserts one row when a donation is inserted as `succeeded` or transitions into `succeeded`; migration installation does not touch historical rows. A unique `(donation_id, notification_type)` key makes repeated reconciliation idempotent. The worker claim RPC uses `FOR UPDATE SKIP LOCKED`, marks rows `sending`, and reclaims abandoned work after ten minutes. Once a row is `sent`, it is never automatically claimed again.
+
+MissionPay's durable database controls remain the primary idempotency boundary. As a supplemental provider guard, each Brevo request includes the stable outbox delivery UUID as `headers.idempotencyKey`. Brevo documents a 30-minute TTL and rejects reuse within that window with `duplicate_parameter`; the same UUID is reused on retries. This provider window is useful but is not a replacement for the durable outbox.
 
 ## RLS strategy
 
@@ -96,7 +98,7 @@ Delivery failure updates only the outbox. It cannot roll back donation success, 
 2. Configure Edge Function secrets and deploy payment functions plus `process-donation-emails`.
 3. Configure the Hyperswitch profile webhook URL to `/functions/v1/hyperswitch-webhook` and ensure its signing key matches `HYPERSWITCH_WEBHOOK_SECRET`.
 4. Store project URL, publishable key, and `CRON_SECRET` in Supabase Vault; schedule `process-recurring-donations` with `pg_cron` and `pg_net`.
-5. Configure `RESEND_API_KEY`, a verified `MISSIONPAY_EMAIL_FROM`, and optional `MISSIONPAY_EMAIL_REPLY_TO` as Edge Function secrets. The migration schedules the email worker with the existing Vault URL and cron secret.
+5. Configure `BREVO_API_KEY`, `MISSIONPAY_EMAIL_FROM_NAME`, `MISSIONPAY_EMAIL_FROM_ADDRESS`, and optional `MISSIONPAY_EMAIL_REPLY_TO` as Edge Function secrets. Register and verify that sender in Brevo first. The migration schedules the email worker with the existing Vault URL and cron secret.
 6. Configure the Vite public variables in Vercel and deploy the built application.
 7. Run one-time, initial monthly, subsequent MIT, failure, duplicate-webhook, email confirmation, and cancellation golden paths.
 
@@ -112,3 +114,7 @@ The schema already supports `refunded` donations and arbitrary payment event typ
 - [Hyperswitch webhook verification](https://docs.hyperswitch.io/explore-hyperswitch/payment-orchestration/quickstart/webhooks)
 - [Supabase scheduled Edge Functions](https://supabase.com/docs/guides/functions/schedule-functions)
 - [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security)
+- [Brevo transactional email endpoint](https://developers.brevo.com/reference/send-transac-email)
+- [Brevo transactional email idempotency](https://developers.brevo.com/docs/heterogenous-versions-batch-emails)
+- [Brevo sender setup and verification](https://help.brevo.com/hc/en-us/articles/208836149-Create-a-new-sender-From-name-and-From-email)
+- [Brevo free/unauthenticated sender rewriting](https://help.brevo.com/hc/en-us/articles/14925263522578-Comply-with-Gmail-Yahoo-and-Microsoft-s-requirements-for-email-senders)

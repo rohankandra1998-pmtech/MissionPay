@@ -53,10 +53,12 @@ The protected development trigger calls this exact worker path; it never substit
 3. Supabase Cron invokes `process-donation-emails` every minute with `x-cron-secret` from Vault.
 4. A service-role-only RPC atomically claims at most 25 pending/retryable rows. Concurrent workers cannot claim the same row.
 5. The worker queries minimal donation, donor, campaign, and optional recurring-plan business fields; it never reads payment-event payloads or payment credentials.
-6. The worker renders escaped HTML and plain text, then calls Resend with `missionpay-donation-confirmation:<donation-id>` as its idempotency key.
-7. Success stores only Resend's message ID and sent timestamp. Failure stores a sanitized error category and schedules a bounded retry.
+6. The worker renders escaped HTML and plain text, then calls `POST https://api.brevo.com/v3/smtp/email` with the server-only `api-key` header. The payload contains the configured sender, trusted donor recipient, fixed confirmation subject/bodies, optional reply-to, and the stable delivery UUID in `headers.idempotencyKey`.
+7. Success stores only Brevo's `messageId` and sent timestamp. Failure stores a sanitized `brevo_http_<status>` or configuration/network category and schedules a bounded retry. Authentication and malformed/configuration failures are classified non-retryable and exhaust that row rather than tight-looping; 408, 429, network failures, and 5xx remain retryable up to the existing five-attempt limit.
 
 One-time successes receive one confirmation. An initial or future monthly success is a distinct donation row and therefore receives its own confirmation. Monthly status/next date are shown only from reconciled recurring-plan state. Anonymous donors are emailed privately while the message notes their public identity remains Anonymous. Payment success, metrics, and supporter activity never depend on email delivery.
+
+The database unique donation/type key, atomic `FOR UPDATE SKIP LOCKED` claim, and terminal `sent` state are the durable idempotency guarantees. Brevo's provider-level guard reuses the stable delivery UUID on retries, but its documented TTL is only 30 minutes, so MissionPay does not treat it as a durable replacement.
 
 ## Failure and retry
 

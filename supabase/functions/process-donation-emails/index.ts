@@ -63,8 +63,9 @@ Deno.serve(async (request) => {
       }
 
       const appUrl = Deno.env.get("APP_URL");
-      const resendApiKey = Deno.env.get("RESEND_API_KEY") ?? "";
-      const emailFrom = Deno.env.get("MISSIONPAY_EMAIL_FROM") ?? "";
+      const brevoApiKey = Deno.env.get("BREVO_API_KEY") ?? "";
+      const emailFromName = Deno.env.get("MISSIONPAY_EMAIL_FROM_NAME") ?? "";
+      const emailFromAddress = Deno.env.get("MISSIONPAY_EMAIL_FROM_ADDRESS") ?? "";
       if (!appUrl) throw new EmailConfigurationError("app_url_missing");
       const message = buildDonationConfirmationEmail({
         donationId: donation.id,
@@ -81,13 +82,15 @@ Deno.serve(async (request) => {
         sandbox: (Deno.env.get("HYPERSWITCH_BASE_URL") ?? "").includes("sandbox"),
       });
       const result = await sendDonationConfirmation({
-        apiKey: resendApiKey,
-        from: emailFrom,
+        apiKey: brevoApiKey,
+        senderName: emailFromName,
+        senderAddress: emailFromAddress,
         replyTo: Deno.env.get("MISSIONPAY_EMAIL_REPLY_TO") || undefined,
       }, {
         to: donor.email,
+        toName: donor.name,
         message,
-        idempotencyKey: `missionpay-donation-confirmation:${donation.id}`,
+        idempotencyKey: delivery.id,
       });
       const { error: updateError } = await admin.from("donation_email_deliveries").update({
         status: "sent",

@@ -12,7 +12,7 @@ MissionPay is a two-sided fundraising prototype for trustworthy campaign discove
 - Ownership-protected, development-only UI for invoking a real monthly MIT cycle
 - Supabase Auth fundraiser signup/login, campaign draft/edit/publish, dashboard metrics, payment visibility, and recurring-support visibility
 - Versioned Postgres schema, RLS, explicit Data API grants, idempotent webhooks, and billing-period uniqueness
-- Backend-authoritative donation confirmation emails with an internal outbox, bounded retries, and Resend idempotency
+- Backend-authoritative donation confirmation emails with an internal outbox, bounded retries, and Brevo transactional delivery
 - Meaningful seed data: five campaigns and successful donation rows that derive the primary demo’s $12,450 / 183 supporters
 
 ## Local setup
@@ -55,8 +55,9 @@ npx supabase secrets set \
   HYPERSWITCH_WEBHOOK_SECRET=... \
   APP_URL=https://your-app.example \
   CRON_SECRET=... \
-  RESEND_API_KEY=... \
-  MISSIONPAY_EMAIL_FROM='MissionPay <donations@your-verified-domain.example>' \
+  BREVO_API_KEY=... \
+  MISSIONPAY_EMAIL_FROM_NAME=MissionPay \
+  MISSIONPAY_EMAIL_FROM_ADDRESS=... \
   MISSIONPAY_EMAIL_REPLY_TO=... \
   ENABLE_DEV_TRIGGER=false
 ```
@@ -90,9 +91,13 @@ Use the profile’s payment response hash key as `HYPERSWITCH_WEBHOOK_SECRET`. E
 
 Supabase’s current recommended hosted architecture combines Cron (`pg_cron`) and `pg_net`. The committed scheduler migration stores no credentials; it reads the project URL and dedicated cron credential from Vault and posts to `/functions/v1/process-recurring-donations` daily at 08:15 UTC. Do not place the Hyperswitch API key in the cron job.
 
-The donation-email migration schedules `/functions/v1/process-donation-emails` every minute with the same protected Vault credential. A database trigger queues only donations that newly enter `succeeded` after the migration is installed; it does not backfill historical successes. The worker reads only current donor/campaign/donation business fields, renders HTML and text, and sends through Resend. Configure `RESEND_API_KEY` and a verified `MISSIONPAY_EMAIL_FROM` in Supabase Edge Function secrets. `MISSIONPAY_EMAIL_REPLY_TO` is optional. Resend requires sender-domain verification for custom domains.
+The donation-email migration schedules `/functions/v1/process-donation-emails` every minute with the same protected Vault credential. A database trigger queues only donations that newly enter `succeeded` after the migration is installed; it does not backfill historical successes. The worker derives the recipient from current trusted donor state, reads only donation/campaign business fields, renders HTML and text, and sends through Brevo's Transactional Email API. Configure `BREVO_API_KEY`, `MISSIONPAY_EMAIL_FROM_NAME`, and `MISSIONPAY_EMAIL_FROM_ADDRESS` only as Supabase Edge Function secrets. `MISSIONPAY_EMAIL_REPLY_TO` is optional.
 
-Email delivery is independent of payment state: missing configuration, provider outages, or delivery failures leave the donation succeeded and the outbox retryable. Sandbox confirmations identify themselves as tests and state that no real money moved.
+For the zero-cost prototype, create or sign in to Brevo, create an API key for transactional sending, add a MissionPay sender, and complete Brevo's sender verification. If its domain is not authenticated, Brevo sends a six-digit code to the sender address. A controlled free-mailbox address such as Gmail can be used for this prototype if the current Brevo account permits it, but that domain cannot be authenticated. Brevo may rewrite a free or unauthenticated From address to an authenticated Brevo sending domain for deliverability, so this does not provide the sender branding or deliverability quality of a custom authenticated domain. A custom domain is a future production enhancement, not a requirement for this MVP. Never commit or expose the API key through a `VITE_` variable.
+
+After configuring the secrets, deploy only the changed email worker with `npx supabase functions deploy process-donation-emails --no-verify-jwt`, then create a new sandbox donation using the intended donor inbox. Verify the donation is `succeeded`, one outbox row is claimed and marked `sent`, Brevo accepted it, and the donor actually received it. Do not requeue exhausted pre-Brevo rows or backfill historical donations for this test.
+
+Email delivery is independent of payment state: missing configuration, provider outages, or delivery failures leave the donation succeeded and affect only the outbox. Transient failures are retryable within the bounded worker policy. Sandbox confirmations identify themselves as tests and state that no real money moved.
 
 ## Verification
 

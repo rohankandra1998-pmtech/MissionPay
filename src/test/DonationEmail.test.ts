@@ -72,60 +72,125 @@ describe("donation confirmation email", () => {
       cvc: "CVC_SECRET_123",
       payment_method: "payment_method_SECRET",
       management_token: "management_token_SECRET",
-      resend_key: "RESEND_SECRET",
+      access_token_hash: "access_token_SECRET",
+      status_token: "status_token_SECRET",
+      brevo_key: "BREVO_API_SECRET_DO_NOT_LEAK",
     } as DonationConfirmationData);
     const rendered = `${message.subject}${message.html}${message.text}`;
     for (const secret of [
       "client_secret_TEST_SHOULD_NEVER_APPEAR", "4111111111111111", "CVC_SECRET_123",
-      "payment_method_SECRET", "management_token_SECRET", "RESEND_SECRET",
+      "payment_method_SECRET", "management_token_SECRET", "access_token_SECRET",
+      "status_token_SECRET", "BREVO_API_SECRET_DO_NOT_LEAK",
     ]) expect(rendered).not.toContain(secret);
   });
 });
 
-describe("Resend transport", () => {
-  it("uses the deterministic provider idempotency key and returns only the message id", async () => {
-    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "provider-123", ignored: "recipient@example.com" }), { status: 200 }));
-    const result = await sendDonationConfirmation({ apiKey: "test-key", from: "MissionPay <donations@example.com>" }, {
-      to: "donor@example.com",
-      message: buildDonationConfirmationEmail(baseDonation),
-      idempotencyKey: "missionpay-donation-confirmation:donation-123",
-    }, fetcher);
+describe("Brevo transport", () => {
+  const config = {
+    apiKey: "BREVO_API_SECRET_DO_NOT_LEAK",
+    senderName: "MissionPay",
+    senderAddress: "verified-sender@example.com",
+    replyTo: "support@example.com",
+  };
+
+  const request = {
+    to: "donor@example.com",
+    toName: "Avery Donor",
+    message: buildDonationConfirmationEmail(baseDonation),
+    idempotencyKey: "89f9d4c1-5e8a-4c62-9c6e-d46e9b0e7dc2",
+  };
+
+  it("uses Brevo's single-email endpoint and official payload shape", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      messageId: "provider-123",
+      ignored: "recipient@example.com",
+    }), { status: 201 }));
+    const result = await sendDonationConfirmation(config, request, fetcher);
+
     expect(result).toEqual({ providerMessageId: "provider-123" });
+    expect(JSON.stringify(result)).not.toContain(config.apiKey);
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0][1]?.headers).toMatchObject({
-      "Idempotency-Key": "missionpay-donation-confirmation:donation-123",
+    expect(fetcher.mock.calls[0][0]).toBe("https://api.brevo.com/v3/smtp/email");
+
+    const init = fetcher.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      "api-key": config.apiKey,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    });
+    const body = JSON.parse(String(init.body));
+    expect(body).toEqual({
+      sender: { name: "MissionPay", email: "verified-sender@example.com" },
+      to: [{ email: "donor@example.com", name: "Avery Donor" }],
+      subject: request.message.subject,
+      htmlContent: request.message.html,
+      textContent: request.message.text,
+      headers: { idempotencyKey: "89f9d4c1-5e8a-4c62-9c6e-d46e9b0e7dc2" },
+      replyTo: { email: "support@example.com" },
+    });
+    expect(String(init.body)).not.toContain(config.apiKey);
+    expect(request.message.html).not.toContain(config.apiKey);
+    expect(request.message.text).not.toContain(config.apiKey);
+  });
+
+  it("sends only safe confirmation fields and no payment credentials", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ messageId: "provider-456" }), { status: 201 }));
+    await sendDonationConfirmation(config, request, fetcher);
+    const payload = String(fetcher.mock.calls[0][1]?.body);
+    for (const secret of [
+      "4111111111111111", "CVC_SECRET_123", "client_secret_TEST",
+      "payment_method_SECRET", "management_token_SECRET", "status_token_SECRET",
+      "access_token_SECRET",
+    ]) expect(payload).not.toContain(secret);
+  });
+
+  it("fails safely when BREVO_API_KEY is missing", async () => {
+    let error: unknown;
+    try {
+      await sendDonationConfirmation({ ...config, apiKey: "" }, request);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(EmailConfigurationError);
+    expect(safeDeliveryError(error)).toBe("brevo_api_key_missing");
+    expect(failedDeliveryUpdate(1, error, Date.parse("2026-08-17T08:00:00Z"))).toEqual({
+      status: "failed",
+      attempt_count: 5,
+      next_attempt_at: "2026-08-17T08:05:00.000Z",
+      last_error: "brevo_api_key_missing",
     });
   });
 
-  it("fails safely when provider configuration is missing", async () => {
-    await expect(sendDonationConfirmation({ apiKey: "", from: "" }, {
-      to: "donor@example.com",
-      message: buildDonationConfirmationEmail(baseDonation),
-      idempotencyKey: "delivery-key",
-    })).rejects.toBeInstanceOf(EmailConfigurationError);
-  });
-
-  it("classifies transient provider failure without exposing the response body", async () => {
-    const fetcher = vi.fn().mockResolvedValue(new Response("RESEND_SECRET recipient@example.com", { status: 503 }));
+  it.each([
+    [401, false],
+    [429, true],
+    [503, true],
+  ])("classifies HTTP %i safely (retryable: %s)", async (status, retryable) => {
+    const sensitiveResponse = "BREVO_API_SECRET_DO_NOT_LEAK 4111111111111111 client_secret_TEST";
+    const fetcher = vi.fn().mockResolvedValue(new Response(sensitiveResponse, { status }));
     let error: unknown;
     try {
-      await sendDonationConfirmation({ apiKey: "test-key", from: "MissionPay <donations@example.com>" }, {
-        to: "donor@example.com",
-        message: buildDonationConfirmationEmail(baseDonation),
-        idempotencyKey: "delivery-key",
-      }, fetcher);
+      await sendDonationConfirmation(config, request, fetcher);
     } catch (caught) {
       error = caught;
     }
     expect(error).toBeInstanceOf(EmailProviderError);
-    expect((error as EmailProviderError).retryable).toBe(true);
-    expect(safeDeliveryError(error)).toBe("resend_http_503");
-    expect(safeDeliveryError(error)).not.toContain("RESEND_SECRET");
-    expect(failedDeliveryUpdate(1, error, Date.parse("2026-08-17T08:00:00Z"))).toEqual({
-      status: "failed",
-      next_attempt_at: "2026-08-17T08:05:00.000Z",
-      last_error: "resend_http_503",
-    });
+    expect((error as EmailProviderError).retryable).toBe(retryable);
+    expect(safeDeliveryError(error)).toBe(`brevo_http_${status}`);
+    expect(safeDeliveryError(error)).not.toContain(sensitiveResponse);
+    const update = failedDeliveryUpdate(1, error, Date.parse("2026-08-17T08:00:00Z"));
+    expect(update.last_error).toBe(`brevo_http_${status}`);
+    expect("attempt_count" in update).toBe(!retryable);
+  });
+
+  it("sanitizes recipient display-name newlines and rejects configured header injection", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ messageId: "provider-789" }), { status: 201 }));
+    await sendDonationConfirmation(config, { ...request, toName: "Avery\r\nBcc: victim@example.com" }, fetcher);
+    const body = JSON.parse(String(fetcher.mock.calls[0][1]?.body));
+    expect(body.to[0].name).toBe("Avery Bcc: victim@example.com");
+    await expect(sendDonationConfirmation({ ...config, senderName: "MissionPay\r\nBcc: victim@example.com" }, request, fetcher))
+      .rejects.toBeInstanceOf(EmailConfigurationError);
   });
 });
 
@@ -135,5 +200,7 @@ describe("worker payment-state isolation", () => {
     expect(source.default).not.toMatch(/from\(["']donations["']\)\.update/);
     expect(source.default).not.toContain("payment_events");
     expect(source.default).not.toContain("request.json");
+    expect(source.default).not.toContain("VITE_BREVO");
+    expect(source.default).toContain("idempotencyKey: delivery.id");
   });
 });
