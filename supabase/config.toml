@@ -1,0 +1,16 @@
+project_id = "asfaizcnrpmnnyisnyir"
+
+[functions.create-payment]
+verify_jwt = false
+
+[functions.payment-status]
+verify_jwt = false
+
+[functions.hyperswitch-webhook]
+verify_jwt = false
+
+[functions.cancel-recurring-donation]
+verify_jwt = false
+
+[functions.process-recurring-donations]
+verify_jwt = false
