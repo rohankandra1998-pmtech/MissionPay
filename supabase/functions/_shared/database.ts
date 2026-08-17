@@ -1,8 +1,19 @@
 import { createClient } from "npm:@supabase/supabase-js@2.112.3";
 
+function managedSecretKey() {
+  const configuredKeys = Deno.env.get("SUPABASE_SECRET_KEYS");
+  if (!configuredKeys) return undefined;
+  try {
+    const keys = JSON.parse(configuredKeys) as Record<string, unknown>;
+    return typeof keys.default === "string" && keys.default ? keys.default : undefined;
+  } catch {
+    throw new Error("Supabase managed server credentials are malformed");
+  }
+}
+
 export function adminClient() {
   const url = Deno.env.get("SUPABASE_URL");
-  const secret = Deno.env.get("SUPABASE_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const secret = managedSecretKey() ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SECRET_KEY");
   if (!url || !secret) throw new Error("Supabase server credentials are not configured");
   return createClient(url, secret, { auth: { persistSession: false, autoRefreshToken: false } });
 }

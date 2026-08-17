@@ -30,7 +30,11 @@ Deno.serve(async (request) => {
     if (body.frequency === "monthly" && body.recurring_consent !== true) return json(request, { error: "Monthly donation authorization is required." }, 400);
 
     const admin = adminClient();
-    const { data: campaign } = await admin.from("campaigns").select("id, title, status, currency").eq("id", body.campaign_id).single();
+    const { data: campaign, error: campaignError } = await admin.from("campaigns").select("id, title, status, currency").eq("id", body.campaign_id).maybeSingle();
+    if (campaignError) {
+      console.error("Campaign lookup failed", { code: campaignError.code, message: campaignError.message });
+      return json(request, { error: "We could not verify this campaign right now. No charge was made. Please try again." }, 500);
+    }
     if (!campaign || campaign.status !== "published") return json(request, { error: "This campaign is not open for donations." }, 409);
     if (campaign.currency !== "USD") return json(request, { error: "MissionPay currently supports USD campaigns only." }, 409);
 

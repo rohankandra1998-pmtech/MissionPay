@@ -6,6 +6,7 @@ import { HyperswitchCheckout } from "../features/payments/HyperswitchCheckout";
 import { track } from "../lib/analytics";
 import { validateDonationAmount } from "../lib/donation";
 import { formatMoney } from "../lib/format";
+import { CHECKOUT_FALLBACK_ERROR, functionErrorMessage, safeErrorFromPayload } from "../lib/functionError";
 import { supabase } from "../lib/supabase";
 import type { Campaign, DonationFrequency } from "../types/domain";
 
@@ -53,7 +54,8 @@ export function DonatePage() {
     setError(null);
     track("checkout_started", { campaign_id: campaignId, frequency, amount_cents: cents });
     const { data, error: invokeError } = await supabase.functions.invoke("create-payment", { body: { campaign_id: campaignId, amount_cents: cents, frequency, donor_name: name.trim(), donor_email: email.trim().toLowerCase(), is_anonymous: anonymous, recurring_consent: consent } });
-    if (invokeError || !data?.client_secret) return setError(data?.error ?? "We could not open secure checkout. No charge was made. Please try again.");
+    if (invokeError) return setError(await functionErrorMessage(invokeError));
+    if (!data?.client_secret) return setError(safeErrorFromPayload(data) ?? CHECKOUT_FALLBACK_ERROR);
     setSession(data as Session);
     setStep("payment");
   };

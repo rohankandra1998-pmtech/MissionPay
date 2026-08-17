@@ -47,7 +47,6 @@ Configure server secrets in Supabase:
 
 ```bash
 npx supabase secrets set \
-  SUPABASE_SECRET_KEY=... \
   HYPERSWITCH_API_KEY=... \
   HYPERSWITCH_BASE_URL=https://sandbox.hyperswitch.io \
   HYPERSWITCH_PROFILE_ID=... \
@@ -57,6 +56,8 @@ npx supabase secrets set \
   CRON_SECRET=... \
   ENABLE_DEV_TRIGGER=false
 ```
+
+Hosted Edge Functions receive the same-project `SUPABASE_SECRET_KEYS` and legacy `SUPABASE_SERVICE_ROLE_KEY` automatically. Do not override them with a manually copied project key; `SUPABASE_SECRET_KEY` remains only a local/self-hosted compatibility fallback.
 
 Deploy functions:
 
