@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { sha256 } from "../_shared/crypto.ts";
 import { adminClient } from "../_shared/database.ts";
+import { claimFailureEnrichment, completeFailureEnrichment, releaseFailureEnrichment } from "../_shared/failureEnrichment.ts";
 import { retrievePayment } from "../_shared/hyperswitch.ts";
 import { isPaymentFailureReason } from "../_shared/paymentFailure.ts";
 import { reconcilePayment } from "../_shared/reconcile.ts";
@@ -18,30 +19,34 @@ Deno.serve(async (request) => {
     const { data: donation } = await admin.from("donations").select("id, amount_cents, currency, frequency, is_anonymous, status, hyperswitch_payment_id, recurring_donation_id, created_at, completed_at, access_token_hash, campaign:campaigns(title, slug), recurring:recurring_donations(status, next_charge_at)").eq("id", donationId).single();
     if (!donation || donation.access_token_hash !== await sha256(token)) return json(request, { error: "Invalid confirmation credentials." }, 401);
     let shouldSync = ["pending", "processing"].includes(donation.status);
+    let enrichmentClaim: { attemptId: string; claimedAt: string } | null = null;
     if (["failed", "cancelled"].includes(donation.status) && donation.hyperswitch_payment_id) {
       const { data: latestAttempt, error: latestAttemptError } = await admin.from("payment_attempts")
-        .select("id, failure_reason, failure_enrichment_attempted_at")
+        .select("id, failure_reason, failure_enrichment_attempted_at, failure_enrichment_claimed_at")
         .eq("donation_id", donationId)
         .order("attempt_number", { ascending: false })
         .limit(1)
         .maybeSingle();
       if (latestAttemptError) throw latestAttemptError;
       if (latestAttempt && (!latestAttempt.failure_reason || latestAttempt.failure_reason === "unknown") && !latestAttempt.failure_enrichment_attempted_at) {
-        const { data: claimedAttempt, error: claimError } = await admin.from("payment_attempts")
-          .update({ failure_enrichment_attempted_at: new Date().toISOString() })
-          .eq("id", latestAttempt.id)
-          .is("failure_enrichment_attempted_at", null)
-          .select("id")
-          .maybeSingle();
-        if (claimError) throw claimError;
-        shouldSync = Boolean(claimedAttempt);
+        const claimedAt = await claimFailureEnrichment(admin, latestAttempt.id);
+        if (claimedAt) enrichmentClaim = { attemptId: latestAttempt.id, claimedAt };
+        shouldSync = Boolean(claimedAt);
       }
     }
     if (shouldSync && donation.hyperswitch_payment_id) {
       try {
         const providerPayment = await retrievePayment(donation.hyperswitch_payment_id, true);
         await reconcilePayment(admin, providerPayment);
+        if (enrichmentClaim) await completeFailureEnrichment(admin, enrichmentClaim.attemptId, enrichmentClaim.claimedAt);
       } catch (error) {
+        if (enrichmentClaim) {
+          try {
+            await releaseFailureEnrichment(admin, enrichmentClaim.attemptId, enrichmentClaim.claimedAt);
+          } catch {
+            console.error("Payment enrichment claim release deferred");
+          }
+        }
         console.error("Payment sync deferred", error instanceof Error ? error.message : "unknown error");
       }
     }

@@ -15,6 +15,7 @@ export const PAYMENT_FAILURE_REASONS = [
 ] as const;
 
 export type PaymentFailureReason = (typeof PAYMENT_FAILURE_REASONS)[number];
+export type PaymentFailureEvidence = Record<string, unknown>;
 
 const standardisedCodes: Record<string, PaymentFailureReason> = {
   INSUFFICIENT_FUNDS: "insufficient_funds",
@@ -206,46 +207,112 @@ export function isPaymentFailureReason(value: unknown): value is PaymentFailureR
   return typeof value === "string" && PAYMENT_FAILURE_REASONS.includes(value as PaymentFailureReason);
 }
 
-export function normalizePaymentFailure(providerPayment: Record<string, unknown>): PaymentFailureReason {
-  const attempt = authoritativeAttempt(providerPayment.attempts);
+export function normalizePaymentFailureEvidence(evidence: PaymentFailureEvidence): PaymentFailureReason {
+  const attempt = record(evidence.authoritative_attempt);
   for (const classifier of [machineReasonFromSource, exactTextReasonFromSource, guidanceReasonFromSource]) {
     const attemptReason = classifier(attempt);
     if (attemptReason) return attemptReason;
   }
   for (const classifier of [machineReasonFromSource, exactTextReasonFromSource, guidanceReasonFromSource]) {
-    const topLevelReason = classifier(providerPayment);
+    const topLevelReason = classifier(evidence);
     if (topLevelReason) return topLevelReason;
   }
   return "unknown";
+}
+
+export function normalizePaymentFailure(providerPayment: Record<string, unknown>): PaymentFailureReason {
+  return normalizePaymentFailureEvidence(extractPaymentFailureEvidence(providerPayment));
 }
 
 function pickStrings(source: Record<string, unknown>, keys: string[]) {
   return Object.fromEntries(keys.flatMap((key) => code(source[key]) ? [[key, code(source[key])]] : []));
 }
 
+function safeEvidenceText(value: unknown) {
+  const text = code(value);
+  if (!text) return "";
+  const containsPan = /(?:\d[ -]?){13,19}/.test(text);
+  const containsCvv = /\b(?:cvv|cvc|security code)\b\s*[:=]?\s*\d{3,4}\b/i.test(text);
+  const containsExpiry = /\b(?:exp|expiry|expiration)\b\s*[:=]?\s*\d{1,2}\s*[/\-]\s*\d{2,4}\b/i.test(text);
+  const containsSecret = /\b(?:client[_ -]?secret|api[_ -]?key|payment[_ -]?token)\b/i.test(text) || /_secret_[a-z0-9]+/i.test(text);
+  const containsEmail = /\b[^\s@]+@[^\s@]+\.[^\s@]+\b/.test(text);
+  return containsPan || containsCvv || containsExpiry || containsSecret || containsEmail ? "" : text;
+}
+
+function pickEvidenceTexts(source: Record<string, unknown>, keys: string[]) {
+  return Object.fromEntries(keys.flatMap((key) => safeEvidenceText(source[key]) ? [[key, safeEvidenceText(source[key])]] : []));
+}
+
 function sanitizeErrorDetails(source: Record<string, unknown>) {
   const { unifiedDetails, connectorDetails, issuerDetails } = errorLayers(source);
   const errorDetails = {
-    unified_details: pickStrings(unifiedDetails, ["standardised_code", "standardized_code", "category", "message", "description", "user_guidance_message"]),
-    connector_details: pickStrings(connectorDetails, ["code", "message", "reason"]),
-    issuer_details: pickStrings(issuerDetails, ["code", "message"]),
+    unified_details: { ...pickStrings(unifiedDetails, ["standardised_code", "standardized_code", "category"]), ...pickEvidenceTexts(unifiedDetails, ["message", "description", "user_guidance_message"]) },
+    connector_details: { ...pickStrings(connectorDetails, ["code"]), ...pickEvidenceTexts(connectorDetails, ["message", "reason"]) },
+    issuer_details: { ...pickStrings(issuerDetails, ["code"]), ...pickEvidenceTexts(issuerDetails, ["message"]) },
   };
   return Object.fromEntries(Object.entries(errorDetails).filter(([, value]) => Object.keys(value).length > 0));
 }
 
-export function sanitizePaymentFailureDiagnostic(providerPayment: Record<string, unknown>) {
-  const topLevel = pickStrings(providerPayment, ["payment_id", "status", "connector", "error_code", "unified_code", "issuer_error_code", "cancellation_reason"]);
-  const errorDetails = sanitizeErrorDetails(providerPayment);
-  const attempts = Array.isArray(providerPayment.attempts)
-    ? providerPayment.attempts.map(record).filter((attempt) => Object.keys(attempt).length > 0).map((attempt) => {
-      const safeAttempt = pickStrings(attempt, ["attempt_id", "status", "connector", "error_code", "unified_code", "issuer_error_code", "cancellation_reason", "created_at", "modified_at", "updated_at"]);
-      const attemptErrorDetails = sanitizeErrorDetails(attempt);
-      return Object.keys(attemptErrorDetails).length ? { ...safeAttempt, error_details: attemptErrorDetails } : safeAttempt;
-    })
-    : [];
+function safeTopLevelMessages(source: Record<string, unknown>) {
+  return Object.fromEntries(["error_message", "unified_message"].flatMap((key) => {
+    const value = code(source[key]);
+    return value && exactDummyTexts[normalizedText(value)] ? [[key, value]] : [];
+  }));
+}
+
+function sanitizeFailureSource(source: Record<string, unknown>, attempt = false) {
+  const safeSource = {
+    ...pickStrings(source, [
+      ...(attempt ? ["attempt_id"] : []),
+      "status",
+      "connector",
+      "error_code",
+      "unified_code",
+      "issuer_error_code",
+      "cancellation_reason",
+      ...(attempt ? ["created_at", "modified_at", "updated_at"] : []),
+    ]),
+    ...safeTopLevelMessages(source),
+  };
+  const errorDetails = sanitizeErrorDetails(source);
+  return Object.keys(errorDetails).length ? { ...safeSource, error_details: errorDetails } : safeSource;
+}
+
+export function extractPaymentFailureEvidence(providerPayment: Record<string, unknown>): PaymentFailureEvidence {
+  const evidence = sanitizeFailureSource(providerPayment);
+  const latestAttempt = authoritativeAttempt(providerPayment.attempts);
+  const authoritativeAttemptEvidence = sanitizeFailureSource(latestAttempt, true);
+  return Object.keys(authoritativeAttemptEvidence).length
+    ? { ...evidence, authoritative_attempt: authoritativeAttemptEvidence }
+    : evidence;
+}
+
+function stringOrNull(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+export function buildPaymentAttemptUpdate(providerPayment: Record<string, unknown>, status: string) {
+  const providerStatus = String(providerPayment.status ?? status);
+  if (!["failed", "cancelled"].includes(status)) {
+    return { status: providerStatus, error_code: null, error_message: null, failure_reason: null, provider_failure_snapshot: null };
+  }
+
+  const evidence = extractPaymentFailureEvidence(providerPayment);
+  const latestAttempt = record(evidence.authoritative_attempt);
   return {
-    ...topLevel,
-    ...(Object.keys(errorDetails).length ? { error_details: errorDetails } : {}),
-    ...(attempts.length ? { attempts } : {}),
+    status: providerStatus,
+    error_code: stringOrNull(latestAttempt.error_code) ?? stringOrNull(evidence.error_code),
+    // Arbitrary top-level provider prose is no longer retained. Useful allowlisted
+    // evidence lives only in the backend-only sanitized snapshot.
+    error_message: null,
+    failure_reason: normalizePaymentFailureEvidence(evidence),
+    provider_failure_snapshot: evidence,
+  };
+}
+
+export function sanitizePaymentFailureDiagnostic(providerPayment: Record<string, unknown>) {
+  return {
+    ...pickStrings(providerPayment, ["payment_id"]),
+    ...extractPaymentFailureEvidence(providerPayment),
   };
 }
