@@ -80,9 +80,13 @@ const legacyCodes: Record<string, PaymentFailureReason> = {
 // allowlist is never used for arbitrary prose or substring matching.
 const exactDummyTexts: Record<string, PaymentFailureReason> = {
   "insufficient funds": "insufficient_funds",
+  "payment declined: insufficient funds": "insufficient_funds",
   "card declined": "card_declined",
+  "payment declined: card declined": "card_declined",
   "lost card": "lost_card",
+  "payment declined: lost card": "lost_card",
   "stolen card": "stolen_card",
+  "payment declined: stolen card": "stolen_card",
   "restricted card": "card_unavailable",
   "unsupported card": "card_unavailable",
   "card not supported": "card_unavailable",
@@ -183,6 +187,7 @@ function exactTextReasonFromSource(source: Record<string, unknown>): PaymentFail
     connectorDetails.message,
     issuerDetails.message,
     source.error_message,
+    source.unified_message,
     unifiedDetails.message,
     unifiedDetails.description,
   ]) {

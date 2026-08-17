@@ -62,6 +62,40 @@ describe("payment failure normalization", () => {
     expect(normalizePaymentFailure(providerResponse)).toBe(expected);
   });
 
+  it.each([
+    ["Payment declined: Card declined", "card_declined"],
+    ["Payment declined: Insufficient funds", "insufficient_funds"],
+    ["Payment declined: Lost card", "lost_card"],
+    ["Payment declined: Stolen card", "stolen_card"],
+  ])("normalizes the exact hosted Fauxpay connector message %s", (message, expected) => {
+    const observedRetrieveShape = {
+      status: "failed",
+      error_code: "DC_08",
+      unified_code: "UE_9000",
+      error_details: {
+        unified_details: { category: "UE_9000", message: "Something went wrong" },
+        connector_details: { code: "DC_08", message, reason: null },
+      },
+      attempts: [{
+        attempt_id: "latest",
+        status: "failure",
+        created_at: "2026-08-17T22:45:00Z",
+        error_code: "DC_08",
+        unified_code: "UE_9000",
+        error_details: {
+          unified_details: { category: "UE_9000", message: "Something went wrong" },
+          connector_details: { code: "DC_08", message, reason: null },
+        },
+      }],
+    };
+
+    expect(normalizePaymentFailure(observedRetrieveShape)).toBe(expected);
+  });
+
+  it("reads an exact Dummy label from the documented top-level unified_message compatibility field", () => {
+    expect(normalizePaymentFailure({ status: "failed", unified_message: "Payment declined: Lost card" })).toBe("lost_card");
+  });
+
   it("uses the latest timestamped attempt as authoritative", () => {
     expect(normalizePaymentFailure({
       status: "failed",
@@ -80,6 +114,17 @@ describe("payment failure normalization", () => {
       attempts: [
         { attempt_id: "older", modified_at: "2026-08-17T10:00:00Z", error_code: "invalid_cvv" },
         { attempt_id: "latest", modified_at: "2026-08-17T10:02:00Z", error_details: { connector_details: { reason: "lost card" } } },
+      ],
+    })).toBe("lost_card");
+  });
+
+  it("uses the observed connector message on the latest attempt instead of stale top-level text", () => {
+    expect(normalizePaymentFailure({
+      status: "failed",
+      error_message: "Payment declined: Card declined",
+      attempts: [
+        { attempt_id: "older", created_at: "2026-08-17T10:00:00Z", error_details: { connector_details: { message: "Payment declined: Stolen card" } } },
+        { attempt_id: "latest", created_at: "2026-08-17T10:02:00Z", error_details: { connector_details: { message: "Payment declined: Lost card" } } },
       ],
     })).toBe("lost_card");
   });

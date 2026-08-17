@@ -166,7 +166,11 @@ describe("client payment failure classifier", () => {
 
   it("uses only exact documented message labels and leaves ambiguous provider values unknown", () => {
     expect(classifyCheckoutFailure({ error: { message: "Insufficient funds" } })).toBe("insufficient_funds");
+    expect(classifyCheckoutFailure({ error: { message: "Payment declined: Lost card" } })).toBe("lost_card");
+    expect(classifyCheckoutFailure({ error_message: "Payment declined: Stolen card" })).toBe("stolen_card");
+    expect(classifyCheckoutFailure({ unified_message: "Payment declined: Card declined" })).toBe("card_declined");
     expect(classifyCheckoutFailure({ error: { message: "Issuer says insufficient funds after risk review" } })).toBe("unknown");
+    expect(classifyCheckoutFailure({ error: { message: "Payment declined: Issuer says card was stolen" } })).toBe("unknown");
     expect(classifyCheckoutFailure({ error: { code: "UE_9000", message: "private detail" } })).toBe("unknown");
     expect(classifyCheckoutFailure({ error: { code: "DC_08", message: "private detail" } })).toBe("unknown");
   });

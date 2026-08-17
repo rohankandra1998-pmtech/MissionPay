@@ -36,9 +36,13 @@ const machineCodes: Record<string, PaymentFailureReason> = {
 // intentionally narrow fallback for SDK errors that expose only type + message.
 const documentedMessages: Record<string, PaymentFailureReason> = {
   "insufficient funds": "insufficient_funds",
+  "payment declined: insufficient funds": "insufficient_funds",
   "card declined": "card_declined",
+  "payment declined: card declined": "card_declined",
   "lost card": "lost_card",
+  "payment declined: lost card": "lost_card",
   "stolen card": "stolen_card",
+  "payment declined: stolen card": "stolen_card",
 };
 
 export interface PaymentFailureContent {
@@ -113,8 +117,11 @@ export function classifyCheckoutFailure(value: unknown): PaymentFailureReason {
   const category = normalized(unified.category || error.unified_code || result.unified_code);
   if (["ue_2000", "ue_3000", "ue_4000"].includes(category)) return "technical_error";
 
-  const exactMessage = normalized(error.message);
-  return documentedMessages[exactMessage] ?? "unknown";
+  for (const candidate of [error.message, error.error_message, result.error_message, result.unified_message]) {
+    const reason = documentedMessages[normalized(candidate)];
+    if (reason) return reason;
+  }
+  return "unknown";
 }
 
 export function checkoutFailureMessage(value: unknown) {
