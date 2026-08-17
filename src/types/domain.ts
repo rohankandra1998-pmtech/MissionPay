@@ -2,6 +2,7 @@ export type CampaignStatus = "draft" | "published" | "closed";
 export type DonationStatus = "pending" | "processing" | "succeeded" | "failed" | "cancelled" | "refunded";
 export type DonationFrequency = "one_time" | "monthly";
 export type RecurringStatus = "pending" | "active" | "past_due" | "cancelled";
+export type PaymentFailureReason = "insufficient_funds" | "card_declined" | "card_unavailable" | "authentication_failed" | "invalid_cvv" | "expired_card" | "invalid_card" | "payment_cancelled" | "session_expired" | "technical_error" | "unknown";
 
 export interface Campaign {
   id: string;

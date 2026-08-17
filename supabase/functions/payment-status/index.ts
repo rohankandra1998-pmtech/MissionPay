@@ -3,6 +3,7 @@ import { corsHeaders, json } from "../_shared/cors.ts";
 import { sha256 } from "../_shared/crypto.ts";
 import { adminClient } from "../_shared/database.ts";
 import { retrievePayment } from "../_shared/hyperswitch.ts";
+import { isPaymentFailureReason } from "../_shared/paymentFailure.ts";
 import { reconcilePayment } from "../_shared/reconcile.ts";
 
 Deno.serve(async (request) => {
@@ -24,10 +25,16 @@ Deno.serve(async (request) => {
         console.error("Payment sync deferred", error instanceof Error ? error.message : "unknown error");
       }
     }
-    const { data: current } = await admin.from("donations").select("id, amount_cents, currency, frequency, is_anonymous, status, hyperswitch_payment_id, recurring_donation_id, created_at, completed_at, campaign:campaigns(title, slug), recurring:recurring_donations(status, next_charge_at)").eq("id", donationId).single();
+    const { data: current } = await admin.from("donations").select("id, campaign_id, amount_cents, currency, frequency, is_anonymous, status, hyperswitch_payment_id, recurring_donation_id, created_at, completed_at, campaign:campaigns(title, slug), recurring:recurring_donations(status, next_charge_at)").eq("id", donationId).single();
+    let failure: { reason: string } | undefined;
+    if (current && ["failed", "cancelled"].includes(current.status)) {
+      const { data: attempt, error: attemptError } = await admin.from("payment_attempts").select("failure_reason").eq("donation_id", donationId).order("attempt_number", { ascending: false }).limit(1).maybeSingle();
+      if (attemptError) throw attemptError;
+      failure = { reason: isPaymentFailureReason(attempt?.failure_reason) ? attempt.failure_reason : "unknown" };
+    }
     const campaign = Array.isArray(current?.campaign) ? current?.campaign[0] : current?.campaign;
     const recurring = Array.isArray(current?.recurring) ? current?.recurring[0] : current?.recurring;
-    return json(request, { ...current, campaign, recurring_status: recurring?.status, next_charge_at: recurring?.next_charge_at, recurring: undefined });
+    return json(request, { ...current, campaign, recurring_status: recurring?.status, next_charge_at: recurring?.next_charge_at, failure, recurring: undefined });
   } catch (error) {
     console.error("payment-status failed", error instanceof Error ? error.message : "unknown error");
     return json(request, { error: "Payment status is temporarily unavailable." }, 500);

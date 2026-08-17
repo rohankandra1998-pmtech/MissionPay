@@ -64,9 +64,13 @@ The database unique donation/type key, atomic `FOR UPDATE SKIP LOCKED` claim, an
 
 - A create-payment failure marks the internal donation failed and tells the donor no charge was made.
 - An immediate checkout error remains on the payment step with human-readable provider-safe text.
-- A terminal failed status never changes campaign metrics and offers a route back to retry.
+- Reconciliation maps Hyperswitch's unified `error_details.unified_details.standardised_code` into MissionPay's constrained `failure_reason` taxonomy. Exact connector machine codes are a legacy fallback; provider message text is never parsed.
+- The public `payment-status` response returns only the normalized reason (`insufficient_funds`, `card_declined`, `card_unavailable`, `authentication_failed`, `invalid_cvv`, `expired_card`, `invalid_card`, `payment_cancelled`, `session_expired`, `technical_error`, or `unknown`). It never returns raw error messages, risk/fraud details, payment-method references, client secrets, or event payloads.
+- A terminal failed status never changes campaign metrics and offers safe, reason-specific guidance plus a direct route to restart checkout. Unknown and previously exhausted attempts use the generic fallback and are not requeued.
 - A processing status continues polling without presenting success.
 - A future implementation may create attempt 2 on the same business donation; the schema already supports ordered attempts.
+
+Sandbox verification should use Hyperswitch's documented dummy-connector scenarios manually after deployment. Test card numbers are verification inputs only and must never be embedded in application logic or fixtures.
 
 ## Cancellation
 

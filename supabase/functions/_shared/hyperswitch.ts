@@ -9,7 +9,9 @@ async function request(path: string, init: RequestInit) {
   const response = await fetch(`${baseUrl()}${path}`, { ...init, headers: { "Content-Type": "application/json", Accept: "application/json", "api-key": apiKey(), ...(init.headers ?? {}) } });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.error) {
-    const error = new Error(payload?.error?.message ?? payload?.message ?? `Hyperswitch returned ${response.status}`) as Error & { code?: string; status?: number };
+    // Provider messages can contain issuer or risk details. Keep them out of logs by
+    // making the throwable message generic; callers only need the machine code/status.
+    const error = new Error("Hyperswitch request failed") as Error & { code?: string; status?: number };
     error.code = payload?.error?.code;
     error.status = response.status;
     throw error;
