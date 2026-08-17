@@ -49,6 +49,38 @@ describe("Hyperswitch checkout confirmation", () => {
     expect(screen.getByRole("button", { name: "Complete secure donation" })).toBeEnabled();
   });
 
+  it("replaces a generic immediate decline with a more specific reconciled reason without blocking retry", async () => {
+    let finishReconciliation: ((value: unknown) => void) | undefined;
+    invoke.mockReturnValue(new Promise((resolve) => { finishReconciliation = resolve; }));
+    confirmPayment.mockResolvedValue({
+      submitSuccessful: true,
+      error: { type: "card_error", message: "private issuer explanation", code: "generic_decline" },
+    });
+    renderCheckout();
+
+    fireEvent.click(screen.getByRole("button", { name: "Complete secure donation" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your card was declined.");
+    expect(screen.getByRole("button", { name: "Complete secure donation" })).toBeEnabled();
+    finishReconciliation?.({ data: { status: "failed", failure: { reason: "lost_card" } }, error: null });
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This card has been reported lost."));
+    expect(screen.getByRole("alert")).not.toHaveTextContent("private issuer explanation");
+    expect(screen.getByRole("button", { name: "Complete secure donation" })).toBeEnabled();
+  });
+
+  it("retains the safe fallback when background reconciliation fails", async () => {
+    invoke.mockRejectedValue(new Error("network failure with private detail"));
+    confirmPayment.mockResolvedValue({ submitSuccessful: true, error: { type: "card_error", message: "private decline", code: "generic_decline" } });
+    renderCheckout();
+
+    fireEvent.click(screen.getByRole("button", { name: "Complete secure donation" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Your card was declined.");
+    expect(alert).not.toHaveTextContent("private decline");
+    expect(screen.getByRole("button", { name: "Complete secure donation" })).toBeEnabled();
+  });
+
   it.each([
     [{ type: "card_error", message: "private decline", code: "generic_decline" }, "Your card was declined."],
     [{ type: "card_error", message: "private unrecognized decline", code: "future_code" }, "Your payment couldn't be completed."],
@@ -108,7 +140,7 @@ describe("Hyperswitch checkout confirmation", () => {
     await screen.findByRole("alert");
 
     const failureEvent = analytics.mock.calls.map(([event]) => (event as CustomEvent).detail).find((detail) => detail.event === "payment_failed");
-    expect(failureEvent).toEqual({ event: "payment_failed", properties: { donation_id: "donation-1", failure_reason: "card_unavailable" } });
+    expect(failureEvent).toEqual({ event: "payment_failed", properties: { donation_id: "donation-1", failure_reason: "stolen_card" } });
     expect(JSON.stringify(failureEvent)).not.toContain("secret risk rule");
     window.removeEventListener("missionpay:analytics", analytics);
   });
@@ -118,7 +150,8 @@ describe("client payment failure classifier", () => {
   it.each([
     [{ error: { code: "insufficient_funds" } }, "insufficient_funds"],
     [{ error: { decline_code: "do_not_honor" } }, "card_declined"],
-    [{ error: { error_code: "lost_card" } }, "card_unavailable"],
+    [{ error: { error_code: "lost_card" } }, "lost_card"],
+    [{ error: { error_code: "stolen_card" } }, "stolen_card"],
     [{ status: "authentication_failed" }, "authentication_failed"],
     [{ error: { code: "invalid_cvv" } }, "invalid_cvv"],
     [{ error: { code: "expired_card" } }, "expired_card"],

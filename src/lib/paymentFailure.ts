@@ -5,8 +5,8 @@ const machineCodes: Record<string, PaymentFailureReason> = {
   card_declined: "card_declined",
   generic_decline: "card_declined",
   do_not_honor: "card_declined",
-  lost_card: "card_unavailable",
-  stolen_card: "card_unavailable",
+  lost_card: "lost_card",
+  stolen_card: "stolen_card",
   restricted_card: "card_unavailable",
   card_not_supported: "card_unavailable",
   authentication_failed: "authentication_failed",
@@ -37,30 +37,44 @@ const machineCodes: Record<string, PaymentFailureReason> = {
 const documentedMessages: Record<string, PaymentFailureReason> = {
   "insufficient funds": "insufficient_funds",
   "card declined": "card_declined",
-  "lost card": "card_unavailable",
-  "stolen card": "card_unavailable",
+  "lost card": "lost_card",
+  "stolen card": "stolen_card",
 };
 
-export const checkoutFailureCopy: Record<PaymentFailureReason, string> = {
-  insufficient_funds: "There aren't enough funds on this card. Try another payment method, or add funds and try again.",
-  card_declined: "Your card was declined. Try another payment method or contact your bank if this continues.",
-  card_unavailable: "This card can't be used for this payment. Try another payment method or contact your bank.",
-  authentication_failed: "We couldn't verify this payment with your bank. Try again and complete the verification step, or use another payment method.",
-  invalid_cvv: "The card security code wasn't accepted. Check it and try again.",
-  expired_card: "This card has expired. Use another payment method.",
-  invalid_card: "The card details weren't accepted. Check them or use another payment method.",
-  payment_cancelled: "The payment was cancelled. Nothing was charged, so you can safely try again.",
-  session_expired: "This payment session expired. Restart the donation to try again.",
-  technical_error: "We couldn't process this payment right now. Try again in a moment or use another payment method.",
-  unknown: "Your payment couldn't be completed. Check your payment details or try another payment method.",
+export interface PaymentFailureContent {
+  eyebrow: string;
+  headline: string;
+  guidance: string;
+  body: string;
+  action: string;
+}
+
+export const paymentFailureContent: Record<PaymentFailureReason, PaymentFailureContent> = {
+  insufficient_funds: { eyebrow: "Payment declined", headline: "There aren't enough funds on this card.", guidance: "Try another payment method, or add funds and try again.", body: "Your donation was not charged or added to the campaign total. Try another payment method, or add funds and try again.", action: "Try another payment method" },
+  card_declined: { eyebrow: "Payment declined", headline: "Your card was declined.", guidance: "Try another payment method or contact your bank if this continues.", body: "Your donation was not charged or added to the campaign total. Try another payment method or contact your bank if this continues.", action: "Try another payment method" },
+  lost_card: { eyebrow: "Payment declined", headline: "This card has been reported lost.", guidance: "Please use another payment method or contact your bank.", body: "Your donation was not charged or added to the campaign total. Please use another payment method or contact your bank.", action: "Try another payment method" },
+  stolen_card: { eyebrow: "Payment declined", headline: "This card has been reported stolen.", guidance: "Please use another payment method or contact your bank.", body: "Your donation was not charged or added to the campaign total. Please use another payment method or contact your bank.", action: "Try another payment method" },
+  card_unavailable: { eyebrow: "Payment declined", headline: "This card can't be used for this payment.", guidance: "Try another payment method or contact your bank.", body: "Your donation was not charged. Try another payment method or contact your bank if you need help with this card. The donation was not added to the campaign total.", action: "Try another payment method" },
+  authentication_failed: { eyebrow: "Payment not verified", headline: "We couldn't verify this payment with your bank.", guidance: "Try again and complete the verification step, or use another payment method.", body: "Your donation was not completed or added to the campaign total. Try again and complete your bank's verification step, or use another payment method.", action: "Try again" },
+  invalid_cvv: { eyebrow: "Payment not completed", headline: "The card security code wasn't accepted.", guidance: "Check it and try again.", body: "Your donation was not charged or added to the campaign total. Check the security code and try again, or use another payment method.", action: "Try again" },
+  expired_card: { eyebrow: "Payment not completed", headline: "This card has expired.", guidance: "Use another payment method.", body: "Your donation was not charged or added to the campaign total. Use another payment method to complete your donation.", action: "Try another payment method" },
+  invalid_card: { eyebrow: "Payment not completed", headline: "The card details weren't accepted.", guidance: "Check them or use another payment method.", body: "Your donation was not charged or added to the campaign total. Check the details or use another payment method.", action: "Try again" },
+  payment_cancelled: { eyebrow: "Payment cancelled", headline: "Payment cancelled.", guidance: "Nothing was charged, so you can safely try again.", body: "Nothing was charged and the donation was not added to the campaign total.", action: "Try again" },
+  session_expired: { eyebrow: "Session expired", headline: "Your payment session expired.", guidance: "Restart the donation to try again.", body: "Nothing was charged or added to the campaign total. Start the payment again to complete your donation.", action: "Restart payment" },
+  technical_error: { eyebrow: "Payment not completed", headline: "We couldn't process this payment right now.", guidance: "Try again in a moment or use another payment method.", body: "Your donation was not charged or added to the campaign total. Please try again in a moment or use another payment method.", action: "Try again" },
+  unknown: { eyebrow: "Payment not completed", headline: "Your payment couldn't be completed.", guidance: "Check your payment details or try another payment method.", body: "Your donation was not charged or added to the campaign total. You can safely try again.", action: "Try again" },
 };
+
+export const checkoutFailureCopy: Record<PaymentFailureReason, string> = Object.fromEntries(
+  Object.entries(paymentFailureContent).map(([reason, content]) => [reason, `${content.headline} ${content.guidance}`]),
+) as Record<PaymentFailureReason, string>;
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function normalized(value: unknown) {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
+  return typeof value === "string" ? value.trim().replace(/\s+/g, " ").toLowerCase() : "";
 }
 
 function reasonFromCode(value: unknown): PaymentFailureReason | null {
@@ -105,6 +119,10 @@ export function classifyCheckoutFailure(value: unknown): PaymentFailureReason {
 
 export function checkoutFailureMessage(value: unknown) {
   return checkoutFailureCopy[classifyCheckoutFailure(value)];
+}
+
+export function isPaymentFailureReason(value: unknown): value is PaymentFailureReason {
+  return typeof value === "string" && value in paymentFailureContent;
 }
 
 export function resultRequiresSdkRedirect(value: unknown) {

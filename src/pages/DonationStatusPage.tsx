@@ -4,24 +4,11 @@ import { ArrowRight, CheckCircle2, Clock3, Copy, RefreshCw, XCircle } from "luci
 import { LoadingState } from "../components/States";
 import { track } from "../lib/analytics";
 import { formatDate, formatMoney } from "../lib/format";
+import { paymentFailureContent } from "../lib/paymentFailure";
 import { supabase } from "../lib/supabase";
 import type { Donation, PaymentFailureReason } from "../types/domain";
 
 interface StatusPayload extends Donation { campaign: { title: string; slug: string }; next_charge_at?: string; recurring_status?: string; failure?: { reason: PaymentFailureReason } }
-
-const failureContent: Record<PaymentFailureReason, { eyebrow: string; headline: string; body: string; action: string }> = {
-  insufficient_funds: { eyebrow: "Payment declined", headline: "There aren't enough funds on this card.", body: "Your donation was not charged or added to the campaign total. Try another payment method, or add funds and try again.", action: "Try another payment method" },
-  card_declined: { eyebrow: "Payment declined", headline: "Your card was declined.", body: "Your donation was not charged or added to the campaign total. Try another payment method or contact your bank if this continues.", action: "Try another payment method" },
-  card_unavailable: { eyebrow: "Payment declined", headline: "This card can't be used for this payment.", body: "Your donation was not charged. Try another payment method or contact your bank if you need help with this card. The donation was not added to the campaign total.", action: "Try another payment method" },
-  authentication_failed: { eyebrow: "Payment not verified", headline: "We couldn't verify this payment with your bank.", body: "Your donation was not completed or added to the campaign total. Try again and complete your bank's verification step, or use another payment method.", action: "Try again" },
-  invalid_cvv: { eyebrow: "Payment not completed", headline: "The card security code wasn't accepted.", body: "Your donation was not charged or added to the campaign total. Check the security code and try again, or use another payment method.", action: "Try again" },
-  expired_card: { eyebrow: "Payment not completed", headline: "This card has expired.", body: "Your donation was not charged or added to the campaign total. Use another payment method to complete your donation.", action: "Try another payment method" },
-  invalid_card: { eyebrow: "Payment not completed", headline: "The card details weren't accepted.", body: "Your donation was not charged or added to the campaign total. Check the details or use another payment method.", action: "Try again" },
-  payment_cancelled: { eyebrow: "Payment cancelled", headline: "Payment cancelled.", body: "Nothing was charged and the donation was not added to the campaign total.", action: "Try again" },
-  session_expired: { eyebrow: "Session expired", headline: "Your payment session expired.", body: "Nothing was charged or added to the campaign total. Start the payment again to complete your donation.", action: "Restart payment" },
-  technical_error: { eyebrow: "Payment not completed", headline: "We couldn't process this payment right now.", body: "Your donation was not charged or added to the campaign total. Please try again in a moment or use another payment method.", action: "Try again" },
-  unknown: { eyebrow: "Payment not completed", headline: "Your donation was not charged.", body: "The attempt was not added to the campaign total. You can safely try again.", action: "Try again" },
-};
 
 export function DonationStatusPage() {
   const { donationId = "" } = useParams();
@@ -49,7 +36,7 @@ export function DonationStatusPage() {
   if (!donation) return <main className="status-page"><XCircle /><h1>We can’t open this confirmation</h1><p>{message}</p><Link className="button button--dark" to="/campaigns">Return to campaigns</Link></main>;
   if (["pending", "processing"].includes(donation.status)) return <main className="status-page"><Clock3 className="pulse" /><p className="eyebrow">Payment processing</p><h1>We’re confirming your donation.</h1><p>Please keep this page open. MissionPay will only count your gift after Hyperswitch confirms it.</p><button className="button button--outline" onClick={() => void refresh()}><RefreshCw size={17} /> Check again</button></main>;
   if (donation.status !== "succeeded") {
-    const content = failureContent[donation.failure?.reason ?? "unknown"];
+    const content = paymentFailureContent[donation.failure?.reason ?? "unknown"];
     return <main className="status-page"><XCircle /><p className="eyebrow">{content.eyebrow}</p><h1>{content.headline}</h1><p>{content.body}</p><div className="status-actions"><Link className="button button--coral" to={`/donate/${donation.campaign_id}`}>{content.action} <ArrowRight size={17} /></Link><Link className="button button--outline" to={`/campaigns/${donation.campaign.slug}`}>Return to campaign</Link></div></main>;
   }
 

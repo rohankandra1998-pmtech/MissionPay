@@ -41,7 +41,7 @@ Supabase Cron + pg_net
 - Supabase publishable keys are the only Supabase keys available to browser code.
 - The donation flow collects no card data. The official Hyperswitch `PaymentElement` renders the secure payment UI.
 - Unified Checkout uses `redirect: "if_required"`. The SDK owns required redirects/3DS; direct no-error results go to MissionPay's status route, where success is decided exclusively from reconciled backend state.
-- Immediate SDK errors stay inline and trigger a best-effort background `payment-status` reconciliation using the random status token stored only in the browser session. That sync never blocks a retry, and redirect query parameters are not trusted.
+- Immediate SDK errors stay inline and trigger a best-effort background `payment-status` reconciliation using the random status token stored only in the browser session. That sync never blocks a retry and can replace generic inline copy with a more specific backend-normalized reason; redirect query parameters are not trusted.
 - Failed confirmations render from a MissionPay-owned normalized reason. Client analytics contain only donation ID plus the safe taxonomy; browser and status views never render connector, issuer, risk, or arbitrary SDK messages.
 - The fundraiser dashboard derives totals from rows returned under RLS; it does not contain demo financial constants.
 
@@ -57,7 +57,9 @@ auth.users 1──1 fundraisers 1──* campaigns 1──* donations *──1 d
 
 `campaign_metrics` and `public_supporter_activity` are projection tables maintained by internal trigger functions. They expose safe, fast public reads while their values remain derived from `donations.status = 'succeeded'` and active recurring plans.
 
-`payment_attempts.failure_reason` is a constrained, provider-neutral classification written during reconciliation. The normalizer reads documented unified, connector, issuer, and expanded attempt-level machine fields; the newest timestamped attempt is authoritative. Ambiguous `UE_9000` and `DC_08` remain `unknown`. Raw provider diagnostics remain backend-only; the capability-protected status endpoint selects only this normalized field for failed or cancelled donations and falls back to `unknown` for historical attempts.
+`payment_attempts.failure_reason` is a constrained, provider-neutral classification written during reconciliation, including separate `lost_card` and `stolen_card` values. The normalizer prefers documented unified, connector, issuer, and expanded attempt-level machine fields, with the newest timestamped attempt authoritative. A narrow normalized exact-text allowlist handles documented/observed Dummy labels and selected Hyperswitch customer-guidance values; arbitrary prose and fuzzy matching are forbidden. Ambiguous `UE_9000` and `DC_08` remain `unknown`; the unified `CARD_LOST_OR_STOLEN` value maps only to the non-specific `card_unavailable`. Raw provider fields remain backend-only; the capability-protected status endpoint selects only this normalized reason.
+
+`payment_attempts.failure_enrichment_attempted_at` is an idempotency marker for terminal UI recovery. When a webhook leaves the latest failed/cancelled attempt `unknown`, `payment-status` atomically claims it and performs one expanded, forced Hyperswitch retrieve. Concurrent or later status calls do not repeat that terminal enrichment, while normal pending/processing reconciliation and verified webhooks continue unchanged.
 
 `donation_email_deliveries` is a backend-only outbox. The donation trigger inserts one row when a donation is inserted as `succeeded` or transitions into `succeeded`; migration installation does not touch historical rows. A unique `(donation_id, notification_type)` key makes repeated reconciliation idempotent. The worker claim RPC uses `FOR UPDATE SKIP LOCKED`, marks rows `sending`, and reclaims abandoned work after ten minutes. Once a row is `sent`, it is never automatically claimed again.
 
@@ -83,7 +85,7 @@ Private trigger functions live in the unexposed `private` schema with an empty `
 - Campaign status and currency are fetched server-side.
 - Raw PAN, CVV, and full payment-instrument data never enter MissionPay.
 - Hyperswitch API keys and webhook secrets exist only as Edge Function secrets.
-- Hyperswitch request exceptions use a generic log-safe message. Provider response messages are never emitted into browser responses or routine function logs.
+- Hyperswitch request exceptions use a generic log-safe message. Provider response messages are never emitted into browser responses or routine function logs. An explicit `HYPERSWITCH_FAILURE_DIAGNOSTICS=true` opt-in logs only an allowlisted projection of failed retrieve responses and is additionally restricted to the hosted Hyperswitch sandbox hostname; it defaults off.
 - Webhooks use the current Hyperswitch `x-webhook-signature-512` HMAC-SHA512 contract.
 - `payment_events.provider_event_id` makes delivery idempotent.
 - `provider_updated_at` prevents an older webhook from rolling state backwards.

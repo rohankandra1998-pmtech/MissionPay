@@ -1,10 +1,11 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { loadHyper } from "@juspay-tech/hyper-js";
 import { HyperElements, PaymentElement, useHyper, useWidgets } from "@juspay-tech/react-hyper-js";
 import { AlertCircle, LockKeyhole } from "lucide-react";
 import { track } from "../../lib/analytics";
-import { checkoutFailureMessage, classifyCheckoutFailure, resultRequiresSdkRedirect } from "../../lib/paymentFailure";
+import { checkoutFailureCopy, checkoutFailureMessage, classifyCheckoutFailure, isPaymentFailureReason, resultRequiresSdkRedirect } from "../../lib/paymentFailure";
 import { supabase } from "../../lib/supabase";
+import type { PaymentFailureReason } from "../../types/domain";
 
 const hyperPromise = loadHyper(import.meta.env.VITE_HYPERSWITCH_PUBLISHABLE_KEY, {
   customBackendUrl: import.meta.env.VITE_HYPERSWITCH_BASE_URL ?? "https://sandbox.hyperswitch.io",
@@ -22,10 +23,40 @@ export function CheckoutForm({ donationId, statusToken, managementToken, continu
   const widgets = useWidgets();
   const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const submission = useRef(0);
+
+  const reconcileFailure = (submissionId: number, fallbackReason: PaymentFailureReason) => {
+    void supabase.functions.invoke("payment-status", { body: { donation_id: donationId, status_token: statusToken } })
+      .then(({ data, error }) => {
+        if (error || submission.current !== submissionId || !data || typeof data !== "object") return;
+        const failure = "failure" in data && data.failure && typeof data.failure === "object" ? data.failure : null;
+        const reason = failure && "reason" in failure ? failure.reason : null;
+        const specificity: Record<PaymentFailureReason, number> = {
+          unknown: 0,
+          technical_error: 1,
+          card_declined: 2,
+          card_unavailable: 2,
+          insufficient_funds: 3,
+          lost_card: 3,
+          stolen_card: 3,
+          authentication_failed: 3,
+          invalid_cvv: 3,
+          expired_card: 3,
+          invalid_card: 3,
+          payment_cancelled: 3,
+          session_expired: 3,
+        };
+        if (isPaymentFailureReason(reason) && specificity[reason] > specificity[fallbackReason]) {
+          setMessage(checkoutFailureCopy[reason]);
+        }
+      })
+      .catch(() => undefined);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!hyper || !widgets || processing) return;
+    const submissionId = ++submission.current;
     setProcessing(true);
     setMessage(null);
     sessionStorage.setItem(`missionpay:donation:${donationId}`, statusToken);
@@ -43,7 +74,7 @@ export function CheckoutForm({ donationId, statusToken, managementToken, continu
         setMessage(checkoutFailureMessage(result));
         setProcessing(false);
         track("payment_failed", { donation_id: donationId, failure_reason: reason });
-        void supabase.functions.invoke("payment-status", { body: { donation_id: donationId, status_token: statusToken } }).catch(() => undefined);
+        reconcileFailure(submissionId, reason);
         return;
       }
       if (resultRequiresSdkRedirect(result)) return;
@@ -53,7 +84,7 @@ export function CheckoutForm({ donationId, statusToken, managementToken, continu
       setMessage(checkoutFailureMessage({ error: { code: reason } }));
       setProcessing(false);
       track("payment_failed", { donation_id: donationId, failure_reason: reason });
-      void supabase.functions.invoke("payment-status", { body: { donation_id: donationId, status_token: statusToken } }).catch(() => undefined);
+      reconcileFailure(submissionId, reason);
     }
   };
 

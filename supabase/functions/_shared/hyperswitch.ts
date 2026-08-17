@@ -1,3 +1,5 @@
+import { sanitizePaymentFailureDiagnostic } from "./paymentFailure.ts";
+
 const baseUrl = () => Deno.env.get("HYPERSWITCH_BASE_URL") ?? "https://sandbox.hyperswitch.io";
 const apiKey = () => {
   const value = Deno.env.get("HYPERSWITCH_API_KEY");
@@ -27,10 +29,16 @@ export function createPayment(input: Record<string, unknown>) {
   return request("/payments", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function retrievePayment(paymentId: string, forceSync = false) {
+export async function retrievePayment(paymentId: string, forceSync = false) {
   const query = new URLSearchParams({ expand_attempts: "true" });
   if (forceSync) query.set("force_sync", "true");
-  return request(`/payments/${encodeURIComponent(paymentId)}?${query.toString()}`, { method: "GET" });
+  const payment = await request(`/payments/${encodeURIComponent(paymentId)}?${query.toString()}`, { method: "GET" });
+  const diagnosticsEnabled = Deno.env.get("HYPERSWITCH_FAILURE_DIAGNOSTICS") === "true"
+    && new URL(baseUrl()).hostname === "sandbox.hyperswitch.io";
+  if (diagnosticsEnabled && ["failed", "authentication_failed", "router_declined", "cancelled"].includes(String(payment.status ?? ""))) {
+    console.info("Hyperswitch sandbox failure diagnostic", JSON.stringify(sanitizePaymentFailureDiagnostic(payment)));
+  }
+  return payment;
 }
 
 export function missionPayStatus(providerStatus: string) {

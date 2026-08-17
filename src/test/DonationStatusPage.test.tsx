@@ -42,6 +42,8 @@ describe("reason-aware donation status", () => {
   it.each([
     ["insufficient_funds", "There aren't enough funds on this card.", "Try another payment method"],
     ["card_declined", "Your card was declined.", "Try another payment method"],
+    ["lost_card", "This card has been reported lost.", "Try another payment method"],
+    ["stolen_card", "This card has been reported stolen.", "Try another payment method"],
     ["card_unavailable", "This card can't be used for this payment.", "Try another payment method"],
     ["authentication_failed", "We couldn't verify this payment with your bank.", "Try again"],
     ["invalid_cvv", "The card security code wasn't accepted.", "Try again"],
@@ -60,7 +62,7 @@ describe("reason-aware donation status", () => {
 
   it("falls back safely when no normalized reason is available", async () => {
     renderStatus(response());
-    expect(await screen.findByRole("heading", { name: "Your donation was not charged." })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Your payment couldn't be completed." })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Try again/ })).toHaveAttribute("href", "/donate/campaign-1");
   });
 

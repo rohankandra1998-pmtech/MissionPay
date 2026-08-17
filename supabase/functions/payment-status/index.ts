@@ -17,7 +17,27 @@ Deno.serve(async (request) => {
     const admin = adminClient();
     const { data: donation } = await admin.from("donations").select("id, amount_cents, currency, frequency, is_anonymous, status, hyperswitch_payment_id, recurring_donation_id, created_at, completed_at, access_token_hash, campaign:campaigns(title, slug), recurring:recurring_donations(status, next_charge_at)").eq("id", donationId).single();
     if (!donation || donation.access_token_hash !== await sha256(token)) return json(request, { error: "Invalid confirmation credentials." }, 401);
-    if (["pending", "processing"].includes(donation.status) && donation.hyperswitch_payment_id) {
+    let shouldSync = ["pending", "processing"].includes(donation.status);
+    if (["failed", "cancelled"].includes(donation.status) && donation.hyperswitch_payment_id) {
+      const { data: latestAttempt, error: latestAttemptError } = await admin.from("payment_attempts")
+        .select("id, failure_reason, failure_enrichment_attempted_at")
+        .eq("donation_id", donationId)
+        .order("attempt_number", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (latestAttemptError) throw latestAttemptError;
+      if (latestAttempt && (!latestAttempt.failure_reason || latestAttempt.failure_reason === "unknown") && !latestAttempt.failure_enrichment_attempted_at) {
+        const { data: claimedAttempt, error: claimError } = await admin.from("payment_attempts")
+          .update({ failure_enrichment_attempted_at: new Date().toISOString() })
+          .eq("id", latestAttempt.id)
+          .is("failure_enrichment_attempted_at", null)
+          .select("id")
+          .maybeSingle();
+        if (claimError) throw claimError;
+        shouldSync = Boolean(claimedAttempt);
+      }
+    }
+    if (shouldSync && donation.hyperswitch_payment_id) {
       try {
         const providerPayment = await retrievePayment(donation.hyperswitch_payment_id, true);
         await reconcilePayment(admin, providerPayment);
