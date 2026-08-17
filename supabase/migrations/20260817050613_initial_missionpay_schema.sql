@@ -313,8 +313,8 @@ select
   (n % 7 = 0),
   'succeeded'::public.donation_status,
   encode(digest('seed-access-' || n, 'sha256'), 'hex'),
-  now() - make_interval(days => (n % 38)),
-  now() - make_interval(days => (n % 38))
+  now() - make_interval(days => (n % 38)::integer),
+  now() - make_interval(days => (n % 38)::integer)
 from ranked;
 
 insert into public.campaign_metrics (campaign_id)

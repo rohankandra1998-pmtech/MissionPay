@@ -82,7 +82,7 @@ Use the profile’s payment response hash key as `HYPERSWITCH_WEBHOOK_SECRET`. E
 
 ## Scheduler
 
-Supabase’s current recommended hosted architecture combines Cron (`pg_cron`) and `pg_net`. Store the project URL and a dedicated `CRON_SECRET` in Vault, then schedule an HTTP `POST` to `/functions/v1/process-recurring-donations` with the same value in `x-cron-secret`. Do not place the Hyperswitch API key in the cron job.
+Supabase’s current recommended hosted architecture combines Cron (`pg_cron`) and `pg_net`. The committed scheduler migration stores no credentials; it reads the project URL and dedicated cron credential from Vault and posts to `/functions/v1/process-recurring-donations` daily at 08:15 UTC. Do not place the Hyperswitch API key in the cron job.
 
 ## Verification
 
