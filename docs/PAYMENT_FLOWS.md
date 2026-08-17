@@ -44,6 +44,19 @@ The protected development trigger calls this exact worker path; it never substit
 6. Update the attempt and donation.
 7. On a successful initial monthly payment, store the safe payment-method reference and activate the plan.
 8. Database triggers refresh safe public metrics and supporter activity.
+9. The same succeeded-state boundary queues one donation confirmation outbox row; it never sends inline with reconciliation.
+
+## Donation confirmation email
+
+1. A donation is inserted as or transitions into `succeeded` after the email migration is deployed.
+2. A database trigger inserts exactly one `donation_confirmation` delivery using a unique donation/type key. Existing historical successes are not backfilled.
+3. Supabase Cron invokes `process-donation-emails` every minute with `x-cron-secret` from Vault.
+4. A service-role-only RPC atomically claims at most 25 pending/retryable rows. Concurrent workers cannot claim the same row.
+5. The worker queries minimal donation, donor, campaign, and optional recurring-plan business fields; it never reads payment-event payloads or payment credentials.
+6. The worker renders escaped HTML and plain text, then calls Resend with `missionpay-donation-confirmation:<donation-id>` as its idempotency key.
+7. Success stores only Resend's message ID and sent timestamp. Failure stores a sanitized error category and schedules a bounded retry.
+
+One-time successes receive one confirmation. An initial or future monthly success is a distinct donation row and therefore receives its own confirmation. Monthly status/next date are shown only from reconciled recurring-plan state. Anonymous donors are emailed privately while the message notes their public identity remains Anonymous. Payment success, metrics, and supporter activity never depend on email delivery.
 
 ## Failure and retry
 

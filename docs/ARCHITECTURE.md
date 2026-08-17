@@ -24,10 +24,14 @@ Hyperswitch outgoing webhook
        └─ reconciles attempt, donation, recurring plan, and campaign metrics
 
 Supabase Cron + pg_net
-  └─ process-recurring-donations
+  ├─ process-recurring-donations
        ├─ claims one unique billing period in Postgres
        ├─ creates a new donation row
        └─ creates a Hyperswitch off-session MIT
+  └─ process-donation-emails
+       ├─ atomically claims a bounded internal outbox batch
+       ├─ reads minimal confirmed MissionPay business data
+       └─ sends HTML + text confirmation ───────────> Resend
 ```
 
 ## Frontend
@@ -51,6 +55,8 @@ auth.users 1──1 fundraisers 1──* campaigns 1──* donations *──1 d
 
 `campaign_metrics` and `public_supporter_activity` are projection tables maintained by internal trigger functions. They expose safe, fast public reads while their values remain derived from `donations.status = 'succeeded'` and active recurring plans.
 
+`donation_email_deliveries` is a backend-only outbox. The donation trigger inserts one row when a donation is inserted as `succeeded` or transitions into `succeeded`; migration installation does not touch historical rows. A unique `(donation_id, notification_type)` key makes repeated reconciliation idempotent. The worker claim RPC uses `FOR UPDATE SKIP LOCKED`, marks rows `sending`, and reclaims abandoned work after ten minutes. Resend receives a stable provider idempotency key as a second duplicate-send guard.
+
 ## RLS strategy
 
 RLS is enabled on every table in the exposed `public` schema.
@@ -59,6 +65,7 @@ RLS is enabled on every table in the exposed `public` schema.
 - Authenticated fundraisers can create and update only campaigns associated with their own `auth.uid()`.
 - Fundraisers can read donors, donations, recurring plans, and attempts only through campaigns they own.
 - No client role can read `payment_events` or write financial records.
+- No anonymous or authenticated client can read or mutate email deliveries or execute the worker claim RPC.
 - Edge Functions use a server secret only after validating their caller or an opaque capability token.
 - Authorization never depends on user-editable `user_metadata`; ownership is stored in `fundraisers.user_id`.
 
@@ -77,14 +84,21 @@ Private trigger functions live in the unexposed `private` schema with an empty `
 - Cancellation changes future scheduling only; historical donations remain immutable.
 - Recurring schedules preserve the donor's anonymity choice and an immutable consent timestamp for every future occurrence.
 
+## Confirmation email security
+
+Email delivery begins only at the database boundary where backend reconciliation changes a donation into `succeeded`. The worker selects the donor name/email, donation amount/currency/frequency/anonymity/completion time, campaign title/slug, donation ID, and—when monthly—the recurring status/next date. Dynamic HTML is escaped. It does not query `payment_events` or select card data, provider secrets, `client_secret`, payment-method references, access/management/status tokens, or raw provider responses. Donor email/name and rendered bodies are not logged or stored in the outbox.
+
+Delivery failure updates only the outbox. It cannot roll back donation success, campaign metrics, supporter activity, or recurring payment reconciliation. Failed work retries with bounded exponential delays for at most five claimed attempts.
+
 ## Deployment
 
 1. Apply the committed migration to the Supabase project.
-2. Configure Edge Function secrets and deploy all five functions.
+2. Configure Edge Function secrets and deploy payment functions plus `process-donation-emails`.
 3. Configure the Hyperswitch profile webhook URL to `/functions/v1/hyperswitch-webhook` and ensure its signing key matches `HYPERSWITCH_WEBHOOK_SECRET`.
 4. Store project URL, publishable key, and `CRON_SECRET` in Supabase Vault; schedule `process-recurring-donations` with `pg_cron` and `pg_net`.
-5. Configure the Vite public variables in Vercel and deploy the built application.
-6. Run one-time, initial monthly, subsequent MIT, failure, duplicate-webhook, and cancellation golden paths.
+5. Configure `RESEND_API_KEY`, a verified `MISSIONPAY_EMAIL_FROM`, and optional `MISSIONPAY_EMAIL_REPLY_TO` as Edge Function secrets. The migration schedules the email worker with the existing Vault URL and cron secret.
+6. Configure the Vite public variables in Vercel and deploy the built application.
+7. Run one-time, initial monthly, subsequent MIT, failure, duplicate-webhook, email confirmation, and cancellation golden paths.
 
 ## Deferred lifecycle work
 
