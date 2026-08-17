@@ -6,24 +6,33 @@ import { EmptyState, LoadingState } from "../components/States";
 import { ProgressBar } from "../components/ProgressBar";
 import { formatMoney } from "../lib/format";
 import { supabase } from "../lib/supabase";
+import { useAuth } from "../hooks/useAuth";
 import type { Campaign, Donation, RecurringDonation } from "../types/domain";
 
 export function DashboardPage({ section = "overview" }: { section?: "overview" | "campaigns" | "donations" }) {
+  const { user } = useAuth();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [donations, setDonations] = useState<Donation[]>([]);
   const [recurring, setRecurring] = useState<RecurringDonation[]>([]);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     const load = async () => {
-      const [{ data: campaignData }, { data: donationData }, { data: recurringData }] = await Promise.all([
-        supabase.from("campaigns").select("*, fundraiser:fundraisers(display_name, organization_name, avatar_url, verification_status), metrics:campaign_metrics(*)").order("created_at", { ascending: false }),
-        supabase.from("donations").select("*, donor:donors(name, email), campaign:campaigns(title, slug)").order("created_at", { ascending: false }).limit(100),
-        supabase.from("recurring_donations").select("id, campaign_id, amount_cents, currency, is_anonymous, status, started_at, next_charge_at, cancelled_at, campaign:campaigns(title, slug)").order("next_charge_at"),
+      if (!user) return;
+      const { data: fundraiser } = await supabase.from("fundraisers").select("id").eq("user_id", user.id).maybeSingle();
+      if (!fundraiser) { setCampaigns([]); setDonations([]); setRecurring([]); setLoading(false); return; }
+      const { data: campaignData } = await supabase.from("campaigns").select("*, fundraiser:fundraisers(display_name, organization_name, avatar_url, verification_status), metrics:campaign_metrics(*)").eq("fundraiser_id", fundraiser.id).order("created_at", { ascending: false });
+      const ownedCampaigns = (campaignData ?? []) as unknown as Campaign[];
+      const campaignIds = ownedCampaigns.map((campaign) => campaign.id);
+      setCampaigns(ownedCampaigns);
+      if (campaignIds.length === 0) { setDonations([]); setRecurring([]); setLoading(false); return; }
+      const [{ data: donationData }, { data: recurringData }] = await Promise.all([
+        supabase.from("donations").select("*, donor:donors(name, email), campaign:campaigns(title, slug)").in("campaign_id", campaignIds).order("created_at", { ascending: false }).limit(100),
+        supabase.from("recurring_donations").select("id, campaign_id, amount_cents, currency, is_anonymous, status, started_at, next_charge_at, cancelled_at, campaign:campaigns(title, slug)").in("campaign_id", campaignIds).order("next_charge_at"),
       ]);
-      setCampaigns((campaignData ?? []) as unknown as Campaign[]); setDonations((donationData ?? []) as unknown as Donation[]); setRecurring((recurringData ?? []) as unknown as RecurringDonation[]); setLoading(false);
+      setDonations((donationData ?? []) as unknown as Donation[]); setRecurring((recurringData ?? []) as unknown as RecurringDonation[]); setLoading(false);
     };
     void load();
-  }, []);
+  }, [user?.id]);
   const totals = useMemo(() => {
     const successful = donations.filter((donation) => donation.status === "succeeded");
     const raised = successful.reduce((sum, donation) => sum + donation.amount_cents, 0);

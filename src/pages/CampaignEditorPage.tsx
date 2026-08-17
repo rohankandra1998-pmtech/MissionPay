@@ -6,12 +6,14 @@ import { ProgressBar } from "../components/ProgressBar";
 import { track } from "../lib/analytics";
 import { formatMoney } from "../lib/format";
 import { supabase } from "../lib/supabase";
+import { useAuth } from "../hooks/useAuth";
 
 const initial = { title: "", category: "Community", short_description: "", story: "", goal: "20000", cover_image_url: "", impact_statement: "", end_date: "" };
 const categories = ["Community", "Education", "Medical", "Environment", "Disaster relief", "Animal welfare"];
 const slugify = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 72);
 
 export function CampaignEditorPage() {
+  const { user } = useAuth();
   const { id } = useParams();
   const navigate = useNavigate();
   const [form, setForm] = useState(initial);
@@ -24,16 +26,18 @@ export function CampaignEditorPage() {
 
   useEffect(() => {
     const load = async () => {
-      const { data: fundraiser } = await supabase.from("fundraisers").select("id").single();
+      if (!user) return;
+      const { data: fundraiser } = await supabase.from("fundraisers").select("id").eq("user_id", user.id).maybeSingle();
       if (!fundraiser) return setError("Your fundraiser profile is still being prepared. Refresh once your account is confirmed.");
       setFundraiserId(fundraiser.id);
       if (id) {
-        const { data } = await supabase.from("campaigns").select("*").eq("id", id).single();
-        if (data) setForm({ title: data.title, category: data.category, short_description: data.short_description, story: data.story, goal: String(data.goal_amount_cents / 100), cover_image_url: data.cover_image_url, impact_statement: data.impact_statement, end_date: data.end_date?.slice(0, 10) ?? "" });
+        const { data } = await supabase.from("campaigns").select("*").eq("id", id).eq("fundraiser_id", fundraiser.id).maybeSingle();
+        if (!data) return setError("Campaign not found or you do not have access to edit it.");
+        setForm({ title: data.title, category: data.category, short_description: data.short_description, story: data.story, goal: String(data.goal_amount_cents / 100), cover_image_url: data.cover_image_url, impact_statement: data.impact_statement, end_date: data.end_date?.slice(0, 10) ?? "" });
       }
     };
     void load();
-  }, [id]);
+  }, [id, user?.id]);
 
   const persist = async (status: "draft" | "published") => {
     if (!fundraiserId) return;
@@ -42,7 +46,7 @@ export function CampaignEditorPage() {
       setError("Add a clear title, a story of at least 100 characters, descriptions of at least 20 characters, a goal of $100 or more, and an HTTPS cover image."); setBusy(false); return;
     }
     const payload = { fundraiser_id: fundraiserId, slug: `${slugify(form.title)}-${(campaignId ?? crypto.randomUUID()).slice(0, 6)}`, title: form.title.trim(), category: form.category, short_description: form.short_description.trim(), story: form.story.trim(), goal_amount_cents: goalCents, currency: "USD", cover_image_url: form.cover_image_url.trim(), impact_statement: form.impact_statement.trim(), end_date: form.end_date ? new Date(`${form.end_date}T23:59:59Z`).toISOString() : null, status, published_at: status === "published" ? new Date().toISOString() : null };
-    const result = campaignId ? await supabase.from("campaigns").update(payload).eq("id", campaignId).select("id").single() : await supabase.from("campaigns").insert(payload).select("id").single();
+    const result = campaignId ? await supabase.from("campaigns").update(payload).eq("id", campaignId).eq("fundraiser_id", fundraiserId).select("id").single() : await supabase.from("campaigns").insert(payload).select("id").single();
     if (result.error) setError(result.error.message); else { setCampaignId(result.data.id); setMessage(status === "published" ? "Campaign published. It is now visible to donors." : "Draft saved."); track(status === "published" ? "campaign_published" : "campaign_created", { campaign_id: result.data.id }); if (!campaignId) navigate(`/dashboard/campaigns/${result.data.id}`, { replace: true }); }
     setBusy(false);
   };
