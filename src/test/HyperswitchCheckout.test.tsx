@@ -2,15 +2,16 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { classifyCheckoutFailure } from "../lib/paymentFailure";
 
-const { confirmPayment, invoke } = vi.hoisted(() => ({
+const { confirmPayment, invoke, paymentElementOptions } = vi.hoisted(() => ({
   confirmPayment: vi.fn(),
   invoke: vi.fn(),
+  paymentElementOptions: vi.fn(),
 }));
 
 vi.mock("@juspay-tech/hyper-js", () => ({ loadHyper: vi.fn(() => Promise.resolve({})) }));
 vi.mock("@juspay-tech/react-hyper-js", () => ({
   HyperElements: ({ children }: { children: React.ReactNode }) => children,
-  PaymentElement: () => <div>Secure payment fields</div>,
+  PaymentElement: ({ options }: { options: Record<string, unknown> }) => { paymentElementOptions(options); return <div>Secure payment fields</div>; },
   useHyper: () => ({ confirmPayment }),
   useWidgets: () => ({ id: "widgets" }),
 }));
@@ -18,8 +19,8 @@ vi.mock("../lib/supabase", () => ({ supabase: { functions: { invoke } } }));
 
 import { CheckoutForm } from "../features/payments/HyperswitchCheckout";
 
-function renderCheckout(continueToStatus = vi.fn()) {
-  render(<CheckoutForm donationId="donation-1" statusToken="status-token-which-is-long-and-random" continueToStatus={continueToStatus} />);
+function renderCheckout(continueToStatus = vi.fn(), frequency: "one_time" | "monthly" = "one_time") {
+  render(<CheckoutForm donationId="donation-1" statusToken="status-token-which-is-long-and-random" frequency={frequency} continueToStatus={continueToStatus} />);
   return continueToStatus;
 }
 
@@ -27,6 +28,7 @@ describe("Hyperswitch checkout confirmation", () => {
   beforeEach(() => {
     confirmPayment.mockReset();
     invoke.mockReset().mockResolvedValue({ data: null, error: null });
+    paymentElementOptions.mockReset();
     sessionStorage.clear();
   });
   afterEach(cleanup);
@@ -83,6 +85,9 @@ describe("Hyperswitch checkout confirmation", () => {
 
   it.each([
     [{ type: "card_error", message: "private decline", code: "generic_decline" }, "Your card was declined."],
+    [{ type: "card_error", message: "private lost-card detail", error_details: { unified_details: { standardised_code: "card_lost_or_stolen" }, issuer_details: { code: "41", message: "lost_card" } } }, "This card has been reported lost."],
+    [{ type: "card_error", message: "private stolen-card detail", error_details: { unified_details: { standardised_code: "card_lost_or_stolen" }, issuer_details: { code: "43", message: "stolen_card" } } }, "This card has been reported stolen."],
+    [{ type: "card_error", message: "private ambiguous detail", error_code: "card_lost_or_stolen" }, "This card can't be used for this payment."],
     [{ type: "card_error", message: "private unrecognized decline", code: "future_code" }, "Your payment couldn't be completed."],
   ])("uses safe checkout copy for an immediate SDK error", async (error, expectedCopy) => {
     confirmPayment.mockResolvedValue({ submitSuccessful: true, error });
@@ -144,6 +149,23 @@ describe("Hyperswitch checkout confirmation", () => {
     expect(JSON.stringify(failureEvent)).not.toContain("secret risk rule");
     window.removeEventListener("missionpay:analytics", analytics);
   });
+
+  it("shows and defaults Hyperswitch's saved-payment consent control for monthly donations", () => {
+    renderCheckout(vi.fn(), "monthly");
+    expect(paymentElementOptions).toHaveBeenCalledWith(expect.objectContaining({
+      displaySavedPaymentMethodsCheckbox: true,
+      savedPaymentMethodsCheckboxCheckedByDefault: true,
+    }));
+    expect(screen.getByText(/securely saved by Hyperswitch/i)).toBeInTheDocument();
+  });
+
+  it("does not request saved-payment controls for one-time donations", () => {
+    renderCheckout();
+    const options = paymentElementOptions.mock.calls[0][0] as Record<string, unknown>;
+    expect(options).not.toHaveProperty("displaySavedPaymentMethodsCheckbox");
+    expect(options).not.toHaveProperty("savedPaymentMethodsCheckboxCheckedByDefault");
+    expect(screen.queryByText(/securely saved by Hyperswitch/i)).not.toBeInTheDocument();
+  });
 });
 
 describe("client payment failure classifier", () => {
@@ -152,6 +174,8 @@ describe("client payment failure classifier", () => {
     [{ error: { decline_code: "do_not_honor" } }, "card_declined"],
     [{ error: { error_code: "lost_card" } }, "lost_card"],
     [{ error: { error_code: "stolen_card" } }, "stolen_card"],
+    [{ error: { error_code: "card_lost_or_stolen" } }, "card_unavailable"],
+    [{ error_details: { unified_details: { standardised_code: "card_lost_or_stolen" }, issuer_details: { code: "41", message: "lost_card" } } }, "lost_card"],
     [{ status: "authentication_failed" }, "authentication_failed"],
     [{ error: { code: "invalid_cvv" } }, "invalid_cvv"],
     [{ error: { code: "expired_card" } }, "expired_card"],

@@ -48,6 +48,30 @@ function providerFailure(message: string, extra: Record<string, unknown> = {}) {
   };
 }
 
+function realisticStripeFailure(message: "lost_card" | "stolen_card", issuerCode: "41" | "43") {
+  return {
+    status: "failed",
+    connector: "stripe",
+    error_code: "card_declined",
+    unified_code: "UE_1000",
+    card_number: "sensitive-pan",
+    cvv: "sensitive-cvv",
+    client_secret: "sensitive-client-secret",
+    payment_token: "sensitive-payment-token",
+    email: "sensitive-donor-email",
+    risk_details: { private_rule: "sensitive-risk-payload" },
+    error_details: {
+      issuer_details: { code: issuerCode, message },
+      unified_details: { category: "UE_1000", standardised_code: "card_lost_or_stolen" },
+      connector_details: {
+        code: "card_declined",
+        message: "Your card was declined.",
+        reason: `message - Your card was declined., decline_code - ${message}`,
+      },
+    },
+  };
+}
+
 describe("payment failure evidence persistence", () => {
   it.each(Object.entries(messages))("builds the persisted %s Fauxpay evidence", (expected, message) => {
     const persistedUpdate = buildPaymentAttemptUpdate(providerFailure(message), "failed");
@@ -70,6 +94,30 @@ describe("payment failure evidence persistence", () => {
         },
       },
     });
+  });
+
+  it.each([
+    ["lost_card", "41"],
+    ["stolen_card", "43"],
+  ] as const)("persists the specific Stripe %s reason with sanitized evidence", (reason, issuerCode) => {
+    const persistedUpdate = buildPaymentAttemptUpdate(realisticStripeFailure(reason, issuerCode), "failed");
+    const serializedSnapshot = JSON.stringify(persistedUpdate.provider_failure_snapshot);
+
+    expect(persistedUpdate).toMatchObject({
+      status: "failed",
+      error_code: "card_declined",
+      error_message: null,
+      failure_reason: reason,
+      provider_failure_snapshot: {
+        connector: "stripe",
+        error_details: {
+          issuer_details: { code: issuerCode, message: reason },
+          unified_details: { standardised_code: "card_lost_or_stolen" },
+          connector_details: { code: "card_declined" },
+        },
+      },
+    });
+    expect(serializedSnapshot).not.toMatch(/sensitive-pan|sensitive-cvv|sensitive-client-secret|sensitive-payment-token|sensitive-donor-email|sensitive-risk-payload/);
   });
 
   it("strips secrets, card data, donor details, risk payloads, and arbitrary top-level prose", () => {

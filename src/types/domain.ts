@@ -59,8 +59,9 @@ export interface RecurringDonation {
   is_anonymous: boolean;
   status: RecurringStatus;
   started_at: string;
-  next_charge_at: string;
+  next_charge_at: string | null;
   cancelled_at: string | null;
+  recurring_payment_method_ready?: boolean;
   campaign?: { title: string; slug: string };
 }
 

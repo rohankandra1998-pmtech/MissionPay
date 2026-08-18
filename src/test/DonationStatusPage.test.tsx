@@ -27,7 +27,7 @@ function response(reason?: PaymentFailureReason, status = "failed") {
   };
 }
 
-function renderStatus(payload: ReturnType<typeof response>) {
+function renderStatus(payload: ReturnType<typeof response> & Record<string, unknown>) {
   invoke.mockResolvedValue({ data: payload, error: null });
   return render(<MemoryRouter initialEntries={["/donations/donation-1/status"]}><Routes><Route path="/donations/:donationId/status" element={<DonationStatusPage />} /></Routes></MemoryRouter>);
 }
@@ -60,6 +60,24 @@ describe("reason-aware donation status", () => {
     expect(screen.getByText(/campaign total/i)).toBeInTheDocument();
   });
 
+  it.each([
+    ["lost_card", "This card has been reported lost.", /reported stolen/i],
+    ["stolen_card", "This card has been reported stolen.", /reported lost/i],
+  ] as const)("shows only the specific issuer status for %s", async (reason, headline, excludedCopy) => {
+    renderStatus(response(reason));
+
+    expect(await screen.findByRole("heading", { name: headline })).toBeInTheDocument();
+    expect(screen.queryByText(excludedCopy)).toBeNull();
+  });
+
+  it("keeps ambiguous unavailable-card failures generic", async () => {
+    renderStatus(response("card_unavailable"));
+
+    expect(await screen.findByRole("heading", { name: "This card can't be used for this payment." })).toBeInTheDocument();
+    expect(screen.queryByText(/reported lost/i)).toBeNull();
+    expect(screen.queryByText(/reported stolen/i)).toBeNull();
+  });
+
   it("falls back safely when no normalized reason is available", async () => {
     renderStatus(response());
     expect(await screen.findByRole("heading", { name: "Your payment couldn't be completed." })).toBeInTheDocument();
@@ -76,5 +94,34 @@ describe("reason-aware donation status", () => {
     renderStatus({ ...response(undefined, "succeeded"), completed_at: "2026-08-17T00:01:00Z" });
     expect(await screen.findByRole("heading", { name: "Thank you for showing up." })).toBeInTheDocument();
     expect(screen.getByText("$50")).toBeInTheDocument();
+  });
+
+  it("shows active monthly status only when reusable payment setup is ready", async () => {
+    sessionStorage.setItem("missionpay:management:donation-1", "secure-management-token");
+    renderStatus({
+      ...response(undefined, "succeeded"),
+      frequency: "monthly",
+      completed_at: "2026-08-17T00:01:00Z",
+      recurring_status: "active",
+      recurring_payment_method_ready: true,
+      next_charge_at: "2026-09-17T12:00:00Z",
+    });
+    expect(await screen.findByText("Monthly donation active")).toBeInTheDocument();
+    expect(screen.getByText("Sep 17, 2026")).toBeInTheDocument();
+  });
+
+  it("confirms the donation without claiming future charges when recurring setup is incomplete", async () => {
+    sessionStorage.setItem("missionpay:management:donation-1", "secure-management-token");
+    renderStatus({
+      ...response(undefined, "succeeded"),
+      frequency: "monthly",
+      completed_at: "2026-08-17T00:01:00Z",
+      recurring_status: "past_due",
+      recurring_payment_method_ready: false,
+    });
+    expect(await screen.findByRole("heading", { name: "Thank you for showing up." })).toBeInTheDocument();
+    expect(screen.getByText("Future monthly donations were not activated")).toBeInTheDocument();
+    expect(screen.queryByText("Monthly donation active")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Next donation/)).not.toBeInTheDocument();
   });
 });

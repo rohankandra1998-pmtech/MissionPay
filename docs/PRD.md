@@ -564,6 +564,8 @@ For MVP:
 - Automatic failed-payment retry strategy: deferred
 - Failed recurring charge should surface as `past_due` or equivalent MissionPay status
 
+An active recurring plan requires non-empty provider customer and reusable payment-method references. A successful initial donation without a reusable method remains a successful donation, but future monthly setup is incomplete and no automatic charge date is advertised. Unified Checkout keeps its provider-managed save-card consent visible and defaults it on only for monthly donations.
+
 For dates such as the 29th, 30th, or 31st, billing logic should use a deterministic end-of-month-safe strategy.
 
 For example, if the corresponding date does not exist, charge on the final calendar day of the target month.
@@ -582,7 +584,7 @@ Cancellation must:
 4. Preserve the audit trail.
 5. Clearly tell the donor that previous donations are unaffected.
 
-For the MVP, recurring donation management can use a secure opaque management token.
+For the MVP, checkout-generated links use a secure opaque management token whose SHA-256 hash is stored. Monthly receipt emails use a backend-signed HMAC-SHA256 capability generated during rendering because the original opaque token is intentionally unrecoverable. The signed payload contains only its version, management purpose, and recurring donation UUID; the signing secret and raw capabilities are never stored or exposed client-side.
 
 Example route:
 
@@ -606,7 +608,11 @@ The management page should show:
 - Next charge date
 - Cancel monthly donation
 
-Do not expose payment credentials.
+Cancellation requires a second, explicit affirmative in-app choice. The safer choice must perform no mutation, and cancellation must remain idempotent.
+
+Every successful donation receives its own confirmation email. Each initial or subsequent monthly success includes current plan status and a management link. A receipt queued before later cancellation or `past_due` transition must still send; only an active plan presents a next charge date. One-time receipts contain no recurring-management control.
+
+Do not expose payment credentials, raw management capabilities, or the signing secret.
 
 ---
 
@@ -1006,9 +1012,9 @@ The function should:
 5. Confirm USD.
 6. Normalize donor data.
 7. Create/find donor record.
-8. Create donation record.
-9. For monthly giving, create recurring setup record.
-10. Create Hyperswitch customer if required.
+8. For monthly giving, retrieve or create the donor's stable Hyperswitch customer; reuse it across independent recurring agreements and do not couple it to cancellation.
+9. For monthly giving, create the recurring setup record only after customer resolution succeeds.
+10. Create the donation record.
 11. Create Hyperswitch payment.
 12. Store Hyperswitch payment ID.
 13. Create payment attempt.

@@ -8,7 +8,7 @@ MissionPay is a two-sided fundraising prototype for trustworthy campaign discove
 - Guest donation flow with presets/custom amounts, anonymity, review, and recurring consent
 - Official Hyperswitch React Unified Checkout with backend-only payment creation
 - Backend-authoritative processing, success, failure, retry, and confirmation states
-- Monthly CIT setup, scheduled MIT worker, end-of-month-safe dates, and opaque-token cancellation
+- Monthly CIT setup, scheduled MIT worker, end-of-month-safe dates, and guest cancellation through legacy opaque or backend-signed email capabilities
 - Ownership-protected, development-only UI for invoking a real monthly MIT cycle
 - Supabase Auth fundraiser signup/login, campaign draft/edit/publish, dashboard metrics, payment visibility, and recurring-support visibility
 - Versioned Postgres schema, RLS, explicit Data API grants, idempotent webhooks, and billing-period uniqueness
@@ -56,6 +56,7 @@ npx supabase secrets set \
   APP_URL=https://your-app.example \
   CRON_SECRET=... \
   BREVO_API_KEY=... \
+  DONATION_MANAGEMENT_LINK_SECRET=... \
   MISSIONPAY_EMAIL_FROM_NAME=MissionPay \
   MISSIONPAY_EMAIL_FROM_ADDRESS=... \
   MISSIONPAY_EMAIL_REPLY_TO=... \
@@ -91,11 +92,17 @@ Use the profile’s payment response hash key as `HYPERSWITCH_WEBHOOK_SECRET`. E
 
 Supabase’s current recommended hosted architecture combines Cron (`pg_cron`) and `pg_net`. The committed scheduler migration stores no credentials; it reads the project URL and dedicated cron credential from Vault and posts to `/functions/v1/process-recurring-donations` daily at 08:15 UTC. Do not place the Hyperswitch API key in the cron job.
 
-The donation-email migration schedules `/functions/v1/process-donation-emails` every minute with the same protected Vault credential. A database trigger queues only donations that newly enter `succeeded` after the migration is installed; it does not backfill historical successes. The worker derives the recipient from current trusted donor state, reads only donation/campaign business fields, renders HTML and text, and sends through Brevo's Transactional Email API. Configure `BREVO_API_KEY`, `MISSIONPAY_EMAIL_FROM_NAME`, and `MISSIONPAY_EMAIL_FROM_ADDRESS` only as Supabase Edge Function secrets. `MISSIONPAY_EMAIL_REPLY_TO` is optional.
+The donation-email migration schedules `/functions/v1/process-donation-emails` every minute with the same protected Vault credential. A database trigger queues only donations that newly enter `succeeded` after the migration is installed; it does not backfill historical successes. The worker derives the recipient from current trusted donor state, reads only donation/campaign business fields, renders HTML and text, and sends through Brevo's Transactional Email API. Configure `BREVO_API_KEY`, `DONATION_MANAGEMENT_LINK_SECRET`, `MISSIONPAY_EMAIL_FROM_NAME`, and `MISSIONPAY_EMAIL_FROM_ADDRESS` only as Supabase Edge Function secrets. `MISSIONPAY_EMAIL_REPLY_TO` is optional.
+
+Set `DONATION_MANAGEMENT_LINK_SECRET` to a cryptographically random value of at least 32 bytes. It is a backend-only HMAC key used only while recurring-management links are rendered; it must never use a `VITE_` prefix, enter Postgres, or be logged. Configure it with a securely generated value:
+
+```bash
+npx supabase secrets set DONATION_MANAGEMENT_LINK_SECRET=...
+```
 
 For the zero-cost prototype, create or sign in to Brevo, create an API key for transactional sending, add a MissionPay sender, and complete Brevo's sender verification. If its domain is not authenticated, Brevo sends a six-digit code to the sender address. A controlled free-mailbox address such as Gmail can be used for this prototype if the current Brevo account permits it, but that domain cannot be authenticated. Brevo may rewrite a free or unauthenticated From address to an authenticated Brevo sending domain for deliverability, so this does not provide the sender branding or deliverability quality of a custom authenticated domain. A custom domain is a future production enhancement, not a requirement for this MVP. Never commit or expose the API key through a `VITE_` variable.
 
-After configuring the secrets, deploy only the changed email worker with `npx supabase functions deploy process-donation-emails --no-verify-jwt`, then create a new sandbox donation using the intended donor inbox. Verify the donation is `succeeded`, one outbox row is claimed and marked `sent`, Brevo accepted it, and the donor actually received it. Do not requeue exhausted pre-Brevo rows or backfill historical donations for this test.
+After configuring the secrets, deploy the changed `process-donation-emails` and `cancel-recurring-donation` functions, then create a new sandbox donation using the intended donor inbox. Verify the donation is `succeeded`, one outbox row is claimed and marked `sent`, Brevo accepted it, and the donor actually received it. Do not requeue exhausted pre-Brevo rows or backfill historical donations for this test.
 
 Email delivery is independent of payment state: missing configuration, provider outages, or delivery failures leave the donation succeeded and affect only the outbox. Transient failures are retryable within the bounded worker policy. Sandbox confirmations identify themselves as tests and state that no real money moved.
 
@@ -111,10 +118,23 @@ Before a demo, verify:
 
 1. One-time sandbox success changes both campaign and dashboard totals.
 2. A failing sandbox payment does not change totals and can be retried.
-3. Monthly checkout displays unselected explicit consent and stores a payment method after success.
+3. Monthly checkout requires MissionPay recurring consent, visibly defaults Hyperswitch's save-payment-method control on, and becomes active only after a reusable method reference is confirmed.
 4. The protected development trigger runs the real MIT worker and creates a second donation/payment.
 5. Sending the same webhook twice creates one payment event and one state transition.
-6. Cancellation prevents the next worker run while preserving history.
+6. Each initial and subsequent successful monthly charge receives its own receipt and secure management link.
+7. Cancellation requires the in-app affirmative confirmation, prevents the next worker run, and preserves history.
+
+### Monthly donation golden path
+
+1. Create a new monthly sandbox donation. Confirm **Save card details** is visible and selected by default, leave it selected, complete checkout, and verify the donation succeeds, the plan is active, and `hyperswitch_payment_method_reference` is non-null.
+2. Confirm the first receipt is delivered with the monthly amount, next donation date, and **Manage monthly donation** link.
+3. Use the ownership-protected development recurring-cycle trigger to run one additional cycle. Confirm Hyperswitch creates an off-session payment without card re-entry, exactly one new succeeded donation is recorded, totals update once, and a second receipt with a management link arrives.
+4. Open the management link and confirm campaign, monthly amount, status, start date, and next charge display.
+5. Click **Cancel monthly donation**, choose **No**, and confirm the plan remains active.
+6. Start cancellation again, choose **Yes**, and confirm the plan is cancelled while both historical donations remain.
+7. Trigger another development cycle and confirm no payment or donation is created for the cancelled plan.
+
+For the negative guard path, create another monthly donation and uncheck **Save card details** if Hyperswitch permits it. The initial donation should still succeed, but the recurring plan must remain non-active, no next automatic charge may be shown, and the development worker must not create a donation or call Hyperswitch for that plan.
 
 ## Documentation
 

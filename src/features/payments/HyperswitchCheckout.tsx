@@ -6,6 +6,7 @@ import { track } from "../../lib/analytics";
 import { checkoutFailureCopy, checkoutFailureMessage, classifyCheckoutFailure, isPaymentFailureReason, resultRequiresSdkRedirect } from "../../lib/paymentFailure";
 import { supabase } from "../../lib/supabase";
 import type { PaymentFailureReason } from "../../types/domain";
+import type { DonationFrequency } from "../../types/domain";
 
 const hyperPromise = loadHyper(import.meta.env.VITE_HYPERSWITCH_PUBLISHABLE_KEY, {
   customBackendUrl: import.meta.env.VITE_HYPERSWITCH_BASE_URL ?? "https://sandbox.hyperswitch.io",
@@ -15,10 +16,11 @@ interface CheckoutFormProps {
   donationId: string;
   statusToken: string;
   managementToken?: string;
+  frequency: DonationFrequency;
   continueToStatus?: () => void;
 }
 
-export function CheckoutForm({ donationId, statusToken, managementToken, continueToStatus }: CheckoutFormProps) {
+export function CheckoutForm({ donationId, statusToken, managementToken, frequency, continueToStatus }: CheckoutFormProps) {
   const hyper = useHyper();
   const widgets = useWidgets();
   const [processing, setProcessing] = useState(false);
@@ -90,7 +92,16 @@ export function CheckoutForm({ donationId, statusToken, managementToken, continu
 
   return (
     <form onSubmit={submit} className="payment-form">
-      <PaymentElement id="missionpay-payment-element" options={{ layout: { type: "accordion", defaultCollapsed: false, radios: true, spacedAccordionItems: false }, branding: "never", paymentMethodsHeaderText: "Choose a secure payment method" }} />
+      {frequency === "monthly" && <p className="monthly-vault-note"><LockKeyhole size={17} />Your payment method needs to be securely saved by Hyperswitch for future monthly donations. MissionPay never stores your card details.</p>}
+      <PaymentElement id="missionpay-payment-element" options={{
+        layout: { type: "accordion", defaultCollapsed: false, radios: true, spacedAccordionItems: false },
+        branding: "never",
+        paymentMethodsHeaderText: "Choose a secure payment method",
+        ...(frequency === "monthly" ? {
+          displaySavedPaymentMethodsCheckbox: true,
+          savedPaymentMethodsCheckboxCheckedByDefault: true,
+        } : {}),
+      }} />
       {message && <div className="inline-error" role="alert"><AlertCircle size={18} /><p>{message}</p></div>}
       <button className="button button--coral button--full" disabled={!hyper || processing}>{processing ? "Processing your donation…" : "Complete secure donation"}</button>
       <p className="secure-note"><LockKeyhole size={15} /> Payment details go directly to Hyperswitch and are never stored by MissionPay.</p>
@@ -98,10 +109,10 @@ export function CheckoutForm({ donationId, statusToken, managementToken, continu
   );
 }
 
-export function HyperswitchCheckout({ clientSecret, donationId, statusToken, managementToken }: { clientSecret: string; donationId: string; statusToken: string; managementToken?: string }) {
+export function HyperswitchCheckout({ clientSecret, donationId, statusToken, managementToken, frequency }: { clientSecret: string; donationId: string; statusToken: string; managementToken?: string; frequency: DonationFrequency }) {
   const appearance = {
     theme: "flat" as const,
     variables: { colorPrimary: "#d85f49", colorBackground: "#fffdf8", colorText: "#17372f", colorDanger: "#b83a32", fontFamily: "Geist, sans-serif", borderRadius: "10px" },
   };
-  return <HyperElements hyper={hyperPromise} options={{ clientSecret, appearance, loader: "auto" }}><CheckoutForm donationId={donationId} statusToken={statusToken} managementToken={managementToken} /></HyperElements>;
+  return <HyperElements hyper={hyperPromise} options={{ clientSecret, appearance, loader: "auto" }}><CheckoutForm donationId={donationId} statusToken={statusToken} managementToken={managementToken} frequency={frequency} /></HyperElements>;
 }

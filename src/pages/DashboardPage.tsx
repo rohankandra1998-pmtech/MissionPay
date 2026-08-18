@@ -5,6 +5,7 @@ import { DashboardNav } from "../components/DashboardNav";
 import { EmptyState, LoadingState } from "../components/States";
 import { ProgressBar } from "../components/ProgressBar";
 import { formatMoney } from "../lib/format";
+import { formatDevRecurringResult } from "../lib/devRecurringDiagnostic";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/useAuth";
 import type { Campaign, Donation, RecurringDonation } from "../types/domain";
@@ -49,11 +50,11 @@ function RecurringTestHarness({ plans }: { plans: RecurringDonation[] }) {
   const run = async (id: string) => {
     setRunningId(id); setMessage("");
     const { data, error } = await supabase.functions.invoke("process-recurring-donations", { body: { recurring_donation_id: id } });
-    setMessage(error ? error.message : `Worker completed: ${data?.results?.[0]?.status ?? "no due charge"}. Refresh to see the new attempt.`);
+    setMessage(error ? error.message : formatDevRecurringResult(data?.results?.[0]));
     setRunningId(null);
   };
   const active = plans.filter((plan) => plan.status === "active");
-  return <section className="dashboard-card dev-harness"><div className="card-heading"><div><p className="eyebrow">Development only</p><h2>Run a monthly billing cycle</h2></div></div><p>This invokes the real recurring worker for one plan. The server still verifies that you own its campaign and that <code>ENABLE_DEV_TRIGGER</code> is enabled.</p>{active.length === 0 ? <EmptyState title="No active monthly plans" message="Complete a monthly sandbox donation first; it will appear here after provider confirmation." /> : <div className="dev-plan-list">{active.map((plan) => <div key={plan.id}><span><strong>{plan.campaign?.title ?? "Monthly plan"}</strong><small>{formatMoney(plan.amount_cents)} · next {new Date(plan.next_charge_at).toLocaleDateString()}</small></span><button type="button" className="button button--outline button--small" disabled={runningId !== null} onClick={() => void run(plan.id)}><RefreshCw size={15} className={runningId === plan.id ? "spin" : ""} /> {runningId === plan.id ? "Running…" : "Run cycle"}</button></div>)}</div>}{message && <p className="dev-message" role="status">{message}</p>}</section>;
+  return <section className="dashboard-card dev-harness"><div className="card-heading"><div><p className="eyebrow">Development only</p><h2>Run a monthly billing cycle</h2></div></div><p>This invokes the real recurring worker for one plan. The server still verifies that you own its campaign and that <code>ENABLE_DEV_TRIGGER</code> is enabled.</p>{active.length === 0 ? <EmptyState title="No active monthly plans" message="Complete a monthly sandbox donation first; it will appear here after provider confirmation." /> : <div className="dev-plan-list">{active.map((plan) => <div key={plan.id}><span><strong>{plan.campaign?.title ?? "Monthly plan"}</strong><small>{formatMoney(plan.amount_cents)} · next {plan.next_charge_at ? new Date(plan.next_charge_at).toLocaleDateString() : "not scheduled"}</small></span><button type="button" className="button button--outline button--small" disabled={runningId !== null} onClick={() => void run(plan.id)}><RefreshCw size={15} className={runningId === plan.id ? "spin" : ""} /> {runningId === plan.id ? "Running…" : "Run cycle"}</button></div>)}</div>}{message && <p className="dev-message" role="status">{message}</p>}</section>;
 }
 
 function RecentDonations({ donations, full = false }: { donations: Donation[]; full?: boolean }) {

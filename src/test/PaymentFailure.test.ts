@@ -19,6 +19,24 @@ function fauxpayInsufficientFundsFingerprint(extra: Record<string, unknown> = {}
   };
 }
 
+function stripeLostOrStolenFailure(message: "lost_card" | "stolen_card", issuerCode: "41" | "43") {
+  return {
+    status: "failed",
+    connector: "stripe",
+    error_code: "card_declined",
+    unified_code: "UE_1000",
+    error_details: {
+      issuer_details: { code: issuerCode, message },
+      unified_details: { category: "UE_1000", standardised_code: "card_lost_or_stolen" },
+      connector_details: {
+        code: "card_declined",
+        message: "Your card was declined.",
+        reason: `message - Your card was declined., decline_code - ${message}`,
+      },
+    },
+  };
+}
+
 describe("payment failure normalization", () => {
   it.each([
     ["INSUFFICIENT_FUNDS", "insufficient_funds"],
@@ -50,6 +68,19 @@ describe("payment failure normalization", () => {
     expect(normalizePaymentFailure(providerResponse)).toBe("expired_card");
     expect(normalizePaymentFailure({ status: "failed", error_message: "insufficient funds" })).toBe("insufficient_funds");
     expect(normalizePaymentFailure({ status: "failed", error_message: "Issuer says insufficient funds after risk review" })).toBe("unknown");
+  });
+
+  it.each([
+    [stripeLostOrStolenFailure("lost_card", "41"), "lost_card"],
+    [stripeLostOrStolenFailure("stolen_card", "43"), "stolen_card"],
+  ])("prefers the exact Stripe issuer label over the generic unified fallback", (providerResponse, expected) => {
+    expect(normalizePaymentFailure(providerResponse)).toBe(expected);
+  });
+
+  it("keeps the ambiguous lost-or-stolen unified code generic", () => {
+    expect(normalizePaymentFailure({
+      error_details: { unified_details: { standardised_code: "CARD_LOST_OR_STOLEN" } },
+    })).toBe("card_unavailable");
   });
 
   it("classifies unified platform categories without exposing their detail", () => {
@@ -155,6 +186,16 @@ describe("payment failure normalization", () => {
         { attempt_id: "latest", modified_at: "2026-08-17T10:02:00Z", error_details: { connector_details: { reason: "lost card" } } },
       ],
     })).toBe("lost_card");
+  });
+
+  it("uses the specific issuer label on the authoritative attempt without consulting stale attempts", () => {
+    expect(normalizePaymentFailure({
+      ...stripeLostOrStolenFailure("stolen_card", "43"),
+      attempts: [
+        { attempt_id: "older", modified_at: "2026-08-17T10:00:00Z", ...stripeLostOrStolenFailure("lost_card", "41") },
+        { attempt_id: "latest", modified_at: "2026-08-17T10:02:00Z", ...stripeLostOrStolenFailure("stolen_card", "43") },
+      ],
+    })).toBe("stolen_card");
   });
 
   it("lets a latest lost-card attempt override the stale Fauxpay compatibility fingerprint", () => {

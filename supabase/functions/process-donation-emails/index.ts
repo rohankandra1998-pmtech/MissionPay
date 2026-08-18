@@ -1,6 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { json } from "../_shared/cors.ts";
 import { adminClient } from "../_shared/database.ts";
+import { createManagementCapability } from "../_shared/managementCapability.ts";
+import { hasRecurringChargeCredentials } from "../_shared/recurring.ts";
 import {
   buildDonationConfirmationEmail,
   EmailConfigurationError,
@@ -28,6 +30,15 @@ function campaignUrl(appUrl: string, slug: string) {
   return url.toString();
 }
 
+function managementUrl(appUrl: string, token: string) {
+  const url = new URL(appUrl);
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new EmailConfigurationError("app_url_invalid");
+  url.pathname = `/manage-donation/${encodeURIComponent(token)}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
 Deno.serve(async (request) => {
   if (request.method !== "POST") return json(request, { error: "Method not allowed" }, 405);
   const cronSecret = Deno.env.get("CRON_SECRET");
@@ -48,7 +59,7 @@ Deno.serve(async (request) => {
     try {
       const { data: donation, error: donationError } = await admin
         .from("donations")
-        .select("id, amount_cents, currency, frequency, is_anonymous, status, completed_at, donor:donors(name, email), campaign:campaigns(title, slug), recurring:recurring_donations(status, next_charge_at)")
+        .select("id, amount_cents, currency, frequency, is_anonymous, status, completed_at, donor:donors(name, email), campaign:campaigns(title, slug), recurring:recurring_donations(id, status, next_charge_at, hyperswitch_customer_id, hyperswitch_payment_method_reference)")
         .eq("id", delivery.donation_id)
         .single();
       if (donationError || !donation || donation.status !== "succeeded" || !donation.completed_at) {
@@ -58,7 +69,7 @@ Deno.serve(async (request) => {
       const campaign = arrayRecord(donation.campaign);
       const recurring = arrayRecord(donation.recurring);
       if (!donor?.email || !donor.name || !campaign?.title || !campaign.slug) throw new Error("email_business_data_incomplete");
-      if (donation.frequency === "monthly" && recurring?.status !== "active") {
+      if (donation.frequency === "monthly" && (!recurring || recurring.status === "pending")) {
         throw new Error("monthly_plan_not_reconciled");
       }
 
@@ -67,6 +78,15 @@ Deno.serve(async (request) => {
       const emailFromName = Deno.env.get("MISSIONPAY_EMAIL_FROM_NAME") ?? "";
       const emailFromAddress = Deno.env.get("MISSIONPAY_EMAIL_FROM_ADDRESS") ?? "";
       if (!appUrl) throw new EmailConfigurationError("app_url_missing");
+      let recurringManagementUrl: string | undefined;
+      if (donation.frequency === "monthly" && recurring) {
+        const linkSecret = Deno.env.get("DONATION_MANAGEMENT_LINK_SECRET") ?? "";
+        try {
+          recurringManagementUrl = managementUrl(appUrl, await createManagementCapability(recurring.id, linkSecret));
+        } catch {
+          throw new EmailConfigurationError("donation_management_link_secret_invalid");
+        }
+      }
       const message = buildDonationConfirmationEmail({
         donationId: donation.id,
         donorName: donor.name,
@@ -78,7 +98,9 @@ Deno.serve(async (request) => {
         isAnonymous: donation.is_anonymous,
         completedAt: donation.completed_at,
         recurringStatus: recurring?.status,
+        recurringPaymentMethodReady: Boolean(recurring && hasRecurringChargeCredentials(recurring)),
         nextChargeAt: recurring?.next_charge_at,
+        managementUrl: recurringManagementUrl,
         sandbox: (Deno.env.get("HYPERSWITCH_BASE_URL") ?? "").includes("sandbox"),
       });
       const result = await sendDonationConfirmation({

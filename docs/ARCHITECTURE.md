@@ -31,6 +31,7 @@ Supabase Cron + pg_net
   └─ process-donation-emails
        ├─ atomically claims a bounded internal outbox batch
        ├─ reads minimal confirmed MissionPay business data
+       ├─ signs an in-memory recurring management capability
        └─ sends HTML + text confirmation ───────────> Brevo Transactional Email API
 ```
 
@@ -57,7 +58,7 @@ auth.users 1──1 fundraisers 1──* campaigns 1──* donations *──1 d
 
 `campaign_metrics` and `public_supporter_activity` are projection tables maintained by internal trigger functions. They expose safe, fast public reads while their values remain derived from `donations.status = 'succeeded'` and active recurring plans.
 
-`payment_attempts.failure_reason` is a constrained, provider-neutral classification written during reconciliation, including separate `lost_card` and `stolen_card` values. One canonical extractor produces a backend-only `provider_failure_snapshot`; that same sanitized object drives normalization and persistence. It retains only present allowlisted status, connector/code, structured unified/connector/issuer detail, and newest authoritative-attempt fields. It excludes card/payment-method data, secrets, donor/billing data, risk payloads, the full provider response, and historical attempt arrays. Arbitrary top-level `error_message` is no longer persisted. The exact Fauxpay `Payment declined: <Dummy label>` wrapper remains a narrow classification fallback; arbitrary prose and fuzzy matching are forbidden. The capability-protected status endpoint selects only the normalized reason and cannot return the snapshot.
+`payment_attempts.failure_reason` is a constrained, provider-neutral classification written during reconciliation. Exact structured issuer evidence preserves separate `lost_card` and `stolen_card` reasons, and the donor sees the corresponding lost- or stolen-card message. An ambiguous `card_lost_or_stolen` signal remains `card_unavailable` and uses generic unavailable-card guidance. One canonical extractor produces a backend-only `provider_failure_snapshot`; that same sanitized object drives normalization and persistence. It retains only present allowlisted status, connector/code, structured unified/connector/issuer detail, and newest authoritative-attempt fields. It excludes card/payment-method data, secrets, donor/billing data, risk payloads, the full provider response, and historical attempt arrays. Arbitrary top-level `error_message` is no longer persisted. The exact Fauxpay `Payment declined: <Dummy label>` wrapper remains a narrow classification fallback; arbitrary prose and fuzzy matching are forbidden. The capability-protected status endpoint selects only the normalized reason and cannot return the snapshot.
 
 Provider status derivation is payload-aware. A bare `requires_payment_method` is expected immediately after payment creation and remains `processing`; it becomes a terminal MissionPay failure only when the authoritative latest attempt or documented last-failed-attempt fields show that confirmation was attempted and failed. Specific safe evidence is normalized through the existing taxonomy, while an unclassified terminal attempt becomes `failed` with reason `unknown`.
 
@@ -89,17 +90,27 @@ Private trigger functions live in the unexposed `private` schema with an empty `
 - Campaign status and currency are fetched server-side.
 - Raw PAN, CVV, and full payment-instrument data never enter MissionPay.
 - Hyperswitch API keys and webhook secrets exist only as Edge Function secrets.
+- Monthly checkout maps each MissionPay donor UUID to one stable `cus_mp_...` Hyperswitch customer. Customer lookup/create is idempotent under concurrent requests and occurs before recurring or donation rows; recurring-plan cancellation does not delete or recreate customer identity.
 - Hyperswitch request exceptions use a generic log-safe message. Provider response messages are never emitted into browser responses or routine function logs. An explicit `HYPERSWITCH_FAILURE_DIAGNOSTICS=true` opt-in logs only an allowlisted projection of failed retrieve responses and is additionally restricted to the hosted Hyperswitch sandbox hostname; it defaults off.
 - Webhooks use the current Hyperswitch `x-webhook-signature-512` HMAC-SHA512 contract.
 - `payment_events.provider_event_id` makes delivery idempotent.
 - `provider_updated_at` prevents an older webhook from rolling state backwards.
 - A unique `(recurring_donation_id, billing_period_start)` index prevents a double monthly charge when workers overlap.
+- `recurring_donations.status = 'active'` is an application invariant requiring non-empty Hyperswitch customer and payment-method references. Initial payment success alone never activates a plan. A definitive missing reusable method leaves the donation succeeded and moves only the recurring plan to the existing non-chargeable `past_due` state.
+- The recurring worker revalidates both references before inserting a donation or contacting Hyperswitch. Inconsistent legacy rows are moved out of `active` and reported as `missing_payment_method` without exposing the reference.
 - Cancellation changes future scheduling only; historical donations remain immutable.
+- Recurring state updates are conditioned on the plan still being in the expected state, so reconciliation or an MIT result cannot reactivate or overwrite a concurrently cancelled plan.
 - Recurring schedules preserve the donor's anonymity choice and an immutable consent timestamp for every future occurrence.
 
 ## Confirmation email security
 
 Email delivery begins only at the database boundary where backend reconciliation changes a donation into `succeeded`. The worker selects the donor name/email, donation amount/currency/frequency/anonymity/completion time, campaign title/slug, donation ID, and—when monthly—the recurring status/next date. Dynamic HTML is escaped. It does not query `payment_events` or select card data, provider secrets, `client_secret`, payment-method references, access/management/status tokens, or raw provider responses. Donor email/name and rendered bodies are not logged or stored in the outbox.
+
+For each monthly receipt, the worker creates a `mp1.payload.signature` bearer capability using HMAC-SHA256 and the backend-only `DONATION_MANAGEMENT_LINK_SECRET`. Its payload contains only version, purpose, and recurring donation UUID. The raw capability exists only while rendering and sending the message; neither it nor the URL is stored or logged. `cancel-recurring-donation` verifies the Web Crypto HMAC before reading the plan. Existing checkout-generated opaque links remain valid through the original SHA-256 hash lookup, while dotted signed-token forms never fall back to legacy lookup.
+
+A succeeded monthly donation is independently emailable from its plan's later lifecycle state. `pending` means initial reconciliation is incomplete and remains retryable. `active`, `cancelled`, and `past_due` plans all produce the already-earned receipt; only an active plan with both reusable charging references shows a next date. Missing initial tokenization is described as setup incomplete rather than as a missed payment. Every monthly receipt includes a management link, including one processed after cancellation.
+
+Browser and management responses expose only `recurring_payment_method_ready`; the actual Hyperswitch reference remains backend-only. The success and management pages require both `status = active` and readiness before advertising a future charge.
 
 Delivery failure updates only the outbox. It cannot roll back donation success, campaign metrics, supporter activity, or recurring payment reconciliation. Failed work retries with bounded exponential delays for at most five claimed attempts.
 
@@ -109,9 +120,15 @@ Delivery failure updates only the outbox. It cannot roll back donation success, 
 2. Configure Edge Function secrets and deploy payment functions plus `process-donation-emails`.
 3. Configure the Hyperswitch profile webhook URL to `/functions/v1/hyperswitch-webhook` and ensure its signing key matches `HYPERSWITCH_WEBHOOK_SECRET`.
 4. Store project URL, publishable key, and `CRON_SECRET` in Supabase Vault; schedule `process-recurring-donations` with `pg_cron` and `pg_net`.
-5. Configure `BREVO_API_KEY`, `MISSIONPAY_EMAIL_FROM_NAME`, `MISSIONPAY_EMAIL_FROM_ADDRESS`, and optional `MISSIONPAY_EMAIL_REPLY_TO` as Edge Function secrets. Register and verify that sender in Brevo first. The migration schedules the email worker with the existing Vault URL and cron secret.
+5. Configure `BREVO_API_KEY`, `DONATION_MANAGEMENT_LINK_SECRET` (at least 32 random bytes), `MISSIONPAY_EMAIL_FROM_NAME`, `MISSIONPAY_EMAIL_FROM_ADDRESS`, and optional `MISSIONPAY_EMAIL_REPLY_TO` as Edge Function secrets. Register and verify that sender in Brevo first. The migration schedules the email worker with the existing Vault URL and cron secret.
 6. Configure the Vite public variables in Vercel and deploy the built application.
 7. Run one-time, initial monthly, subsequent MIT, failure, duplicate-webhook, email confirmation, and cancellation golden paths.
+
+```text
+First monthly donation → payment succeeds → reusable method confirmed → plan active → receipt + signed management link
+  → management page → explicit cancellation confirmation → plan cancelled
+  → future recurring workers skip the plan; historical donations remain
+```
 
 ## Deferred lifecycle work
 

@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { randomToken, sha256 } from "../_shared/crypto.ts";
 import { adminClient } from "../_shared/database.ts";
-import { createCustomer, createPayment, nextMonthlyDate } from "../_shared/hyperswitch.ts";
+import { createPayment, ensureCustomer, hyperswitchErrorDiagnostic, nextMonthlyDate } from "../_shared/hyperswitch.ts";
 
 interface RequestBody {
   campaign_id?: string;
@@ -45,7 +45,7 @@ Deno.serve(async (request) => {
     let recurringId: string | null = null;
     const customerId = `cus_mp_${donor.id.replaceAll("-", "")}`;
     if (body.frequency === "monthly") {
-      await createCustomer({ customerId, name, email });
+      await ensureCustomer({ customerId, name, email });
       const now = new Date();
       const { data: recurring, error: recurringError } = await admin.from("recurring_donations").insert({
         campaign_id: campaign.id,
@@ -99,11 +99,11 @@ Deno.serve(async (request) => {
     } catch (paymentError) {
       await admin.from("donations").update({ status: "failed" }).eq("id", donation.id);
       if (recurringId) await admin.from("recurring_donations").update({ status: "past_due" }).eq("id", recurringId);
-      console.error("Hyperswitch create payment failed", paymentError instanceof Error ? paymentError.message : "unknown error");
+      console.error("Hyperswitch create payment failed", hyperswitchErrorDiagnostic(paymentError));
       return json(request, { error: "Secure checkout could not be started. No charge was made." }, 502);
     }
   } catch (error) {
-    console.error("create-payment failed", error instanceof Error ? error.message : "unknown error");
+    console.error("create-payment failed", hyperswitchErrorDiagnostic(error));
     return json(request, { error: "We could not prepare this donation. No charge was made." }, 500);
   }
 });

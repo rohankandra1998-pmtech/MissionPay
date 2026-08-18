@@ -18,17 +18,20 @@ MissionPay donation states are centralized as `pending → processing → succee
 ## Monthly CIT and setup
 
 1. Monthly is a separate, equally visible frequency. One-time remains the default.
-2. The donor sees the exact amount due today and every month and must check an unselected authorization checkbox.
-3. `create-payment` creates a Hyperswitch customer and a pending `recurring_donations` row with a SHA-256 hash of a random management token.
-4. The initial payment is a customer-initiated payment with `setup_future_usage: "off_session"` and the shared Hyperswitch customer ID.
-5. After provider success, MissionPay retrieves/stores only the returned `payment_method_id`, activates the recurring plan, and calculates the next monthly date.
-6. The plain management token is returned once to the donor browser and is not recoverable from the database.
+2. The donor sees the exact amount due today and every month and must check an unselected MissionPay authorization checkbox.
+3. `create-payment` derives one stable Hyperswitch customer ID from the MissionPay donor UUID, retrieves and reuses that customer when it exists, or creates it after the provider's exact not-found response. Exact duplicate-create handling retrieves again to close concurrent creation races before any recurring or donation row is inserted.
+4. The initial payment is a customer-initiated payment with `setup_future_usage: "off_session"` and the shared Hyperswitch customer ID. Unified Checkout visibly displays its save-payment-method checkbox and defaults it on for monthly checkout; Hyperswitch derives `customer_acceptance` from the donor's control rather than MissionPay fabricating it.
+5. After provider success, MissionPay normalizes a direct `payment_method_id` or force-sync retrieves the payment when it is absent. Only a non-empty customer ID plus non-empty reusable method activates the plan and calculates the next monthly date.
+6. If authoritative retrieval still has no reusable method, the first donation remains succeeded while the plan becomes non-chargeable `past_due`. Donor-facing surfaces call this initial setup incomplete and show no future date.
+7. The plain management token is returned once to the donor browser and is not recoverable from the database.
+
+The Hyperswitch customer represents reusable donor/payment identity, while each `recurring_donations` row represents an independent giving agreement. Cancelling one agreement never deletes the customer; the same donor customer can begin another monthly agreement for the same or a different campaign.
 
 ## Monthly MIT
 
 1. Supabase Cron invokes `process-recurring-donations` with a dedicated cron secret.
-2. The worker selects active plans whose `next_charge_at <= now()`.
-3. It inserts a new monthly donation for the scheduled billing date. The database unique constraint is the concurrency guard.
+2. The worker selects active plans whose `next_charge_at <= now()`, then defensively requires non-empty customer and payment-method references.
+3. A malformed legacy row is moved to non-chargeable `past_due` and returns `missing_payment_method` before any donation insert or provider call. Otherwise, the worker inserts a new monthly donation for the scheduled billing date. The database unique constraint is the concurrency guard.
 4. It creates a Hyperswitch payment with `confirm: true`, `off_session: true`, and `recurring_details: { type: "payment_method_id", data: ... }` using the same customer and profile as the CIT.
 5. Success advances the next date; a missing calendar day falls back to that month’s final day.
 6. Failure marks the occurrence failed and the plan `past_due`. Automatic retries/dunning are deferred.
@@ -53,11 +56,12 @@ The protected development trigger calls this exact worker path; it never substit
 2. A database trigger inserts exactly one `donation_confirmation` delivery using a unique donation/type key. Existing historical successes are not backfilled.
 3. Supabase Cron invokes `process-donation-emails` every minute with `x-cron-secret` from Vault.
 4. A service-role-only RPC atomically claims at most 25 pending/retryable rows. Concurrent workers cannot claim the same row.
-5. The worker queries minimal donation, donor, campaign, and optional recurring-plan business fields; it never reads payment-event payloads or payment credentials.
-6. The worker renders escaped HTML and plain text, then calls `POST https://api.brevo.com/v3/smtp/email` with the server-only `api-key` header. The payload contains the configured sender, trusted donor recipient, fixed confirmation subject/bodies, optional reply-to, and the stable delivery UUID in `headers.idempotencyKey`.
-7. Success stores only Brevo's `messageId` and sent timestamp. Failure stores a sanitized `brevo_http_<status>` or configuration/network category and schedules a bounded retry. Authentication and malformed/configuration failures are classified non-retryable and exhaust that row rather than tight-looping; 408, 429, network failures, and 5xx remain retryable up to the existing five-attempt limit.
+5. The worker queries minimal donation, donor, campaign, and optional recurring-plan business fields; it never reads payment-event payloads or payment credentials. A monthly plan still in `pending` is retried because initial reconciliation is incomplete. Later `active`, `cancelled`, or `past_due` state does not suppress the already-successful donation receipt.
+6. For monthly donations, the worker signs a `mp1.payload.signature` capability with backend-only `DONATION_MANAGEMENT_LINK_SECRET`. The payload contains only version, `manage_recurring_donation` purpose, and recurring donation UUID. The raw capability is never persisted or logged.
+7. The worker renders escaped HTML and plain text, then calls `POST https://api.brevo.com/v3/smtp/email` with the server-only `api-key` header. The payload contains the configured sender, trusted donor recipient, fixed confirmation subject/bodies, optional reply-to, and the stable delivery UUID in `headers.idempotencyKey`.
+8. Success stores only Brevo's `messageId` and sent timestamp. Failure stores a sanitized `brevo_http_<status>` or configuration/network category and schedules a bounded retry. Authentication and malformed/configuration failures are classified non-retryable and exhaust that row rather than tight-looping; 408, 429, network failures, and 5xx remain retryable up to the existing five-attempt limit.
 
-One-time successes receive one confirmation. An initial or future monthly success is a distinct donation row and therefore receives its own confirmation. Monthly status/next date are shown only from reconciled recurring-plan state. Anonymous donors are emailed privately while the message notes their public identity remains Anonymous. Payment success, metrics, and supporter activity never depend on email delivery.
+One-time successes receive one confirmation and no management control. An initial or future monthly success is a distinct donation row and therefore receives its own confirmation and management link. Active-and-ready monthly receipts show the next date; missing initial tokenization says setup incomplete with no future charge; cancelled receipts explicitly state there are no future charges and still confirm the successful payment. Anonymous donors are emailed privately while the message notes their public identity remains Anonymous. Payment success, metrics, and supporter activity never depend on email delivery.
 
 The database unique donation/type key, atomic `FOR UPDATE SKIP LOCKED` claim, and terminal `sent` state are the durable idempotency guarantees. Brevo's provider-level guard reuses the stable delivery UUID on retries, but its documented TTL is only 30 minutes, so MissionPay does not treat it as a durable replacement.
 
@@ -86,7 +90,7 @@ The diagnostic contains only payment/attempt IDs, statuses, connector names, tim
 
 ## Cancellation
 
-`cancel-recurring-donation` hashes the opaque URL token and looks up the plan server-side. Cancellation is idempotent, sets `status = cancelled` and `cancelled_at`, and preserves every prior donation and event. The scheduler selects only `active` plans.
+`cancel-recurring-donation` accepts either an existing opaque URL token (looked up by its stored SHA-256 hash) or a signed email capability (HMAC verified before lookup). Invalid, altered, unsupported, and nonexistent capabilities receive the same generic response and expose no plan data. The management page requires a second explicit affirmative action; the safe choice receives initial focus and performs no mutation. Cancellation is idempotent, sets `status = cancelled` and `cancelled_at`, and preserves every prior donation and event. The scheduler selects only `active` plans, and its result updates are also conditioned on the plan remaining active.
 
 ## Refunds and disputes
 
