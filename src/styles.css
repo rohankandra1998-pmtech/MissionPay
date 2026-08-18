@@ -284,6 +284,12 @@ p { line-height: 1.65; }
 .manage-actions { justify-content: space-between; }
 .manage-actions > div { display: flex; align-items: center; gap: 10px; }
 .manage-actions p { margin: 0; font-size: .85rem; }
+.confirmation-dialog { margin-top: 22px; padding: 26px; border: 1px solid rgba(167,46,40,.2); border-radius: 12px; background: #fff8f5; box-shadow: 0 18px 45px rgba(72,31,25,.1); }
+.confirmation-dialog h2 { margin-bottom: 12px; font-size: 1.65rem; }
+.confirmation-dialog > p { margin-bottom: 20px; color: var(--ink-soft); }
+.confirmation-dialog__actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.confirmation-dialog__actions .button--dark { flex: 1 1 240px; }
+.confirmation-dialog__actions .button--danger { flex: 1 1 220px; }
 
 .auth-page { min-height: 100vh; display: grid; grid-template-columns: 1fr 1fr; }
 .auth-story { padding: 90px; background: linear-gradient(180deg, rgba(16,45,37,.15), rgba(16,45,37,.92)), url("https://images.unsplash.com/photo-1559027615-cd4628902d4a?auto=format&fit=crop&w=1500&q=85") center/cover; color: white; display: flex; align-items: flex-end; }

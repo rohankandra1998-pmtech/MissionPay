@@ -48,12 +48,12 @@ Deno.serve(async (request) => {
           attempt_number: 1,
           ...buildPaymentAttemptUpdate(providerPayment, missionStatus),
         });
-        if (missionStatus === "succeeded") await admin.from("recurring_donations").update({ status: "active", next_charge_at: nextMonthlyDate(new Date(plan.next_charge_at), plan.billing_anchor_day).toISOString() }).eq("id", plan.id);
-        else if (missionStatus === "failed") await admin.from("recurring_donations").update({ status: "past_due" }).eq("id", plan.id);
+        if (missionStatus === "succeeded") await admin.from("recurring_donations").update({ status: "active", next_charge_at: nextMonthlyDate(new Date(plan.next_charge_at), plan.billing_anchor_day).toISOString() }).eq("id", plan.id).eq("status", "active");
+        else if (missionStatus === "failed") await admin.from("recurring_donations").update({ status: "past_due" }).eq("id", plan.id).eq("status", "active");
         results.push({ recurring_id: plan.id, donation_id: donation.id, payment_id: providerPayment.payment_id, status: missionStatus, period: periodStart });
       } catch (paymentError) {
         await admin.from("donations").update({ status: "failed" }).eq("id", donation.id);
-        await admin.from("recurring_donations").update({ status: "past_due" }).eq("id", plan.id);
+        await admin.from("recurring_donations").update({ status: "past_due" }).eq("id", plan.id).eq("status", "active");
         console.error("Recurring payment failed", plan.id, paymentError instanceof Error ? paymentError.message : "unknown error");
         results.push({ recurring_id: plan.id, donation_id: donation.id, status: "failed", period: periodStart });
       }

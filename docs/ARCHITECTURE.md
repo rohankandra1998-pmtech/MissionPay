@@ -31,6 +31,7 @@ Supabase Cron + pg_net
   └─ process-donation-emails
        ├─ atomically claims a bounded internal outbox batch
        ├─ reads minimal confirmed MissionPay business data
+       ├─ signs an in-memory recurring management capability
        └─ sends HTML + text confirmation ───────────> Brevo Transactional Email API
 ```
 
@@ -95,11 +96,16 @@ Private trigger functions live in the unexposed `private` schema with an empty `
 - `provider_updated_at` prevents an older webhook from rolling state backwards.
 - A unique `(recurring_donation_id, billing_period_start)` index prevents a double monthly charge when workers overlap.
 - Cancellation changes future scheduling only; historical donations remain immutable.
+- Recurring state updates are conditioned on the plan still being in the expected state, so reconciliation or an MIT result cannot reactivate or overwrite a concurrently cancelled plan.
 - Recurring schedules preserve the donor's anonymity choice and an immutable consent timestamp for every future occurrence.
 
 ## Confirmation email security
 
 Email delivery begins only at the database boundary where backend reconciliation changes a donation into `succeeded`. The worker selects the donor name/email, donation amount/currency/frequency/anonymity/completion time, campaign title/slug, donation ID, and—when monthly—the recurring status/next date. Dynamic HTML is escaped. It does not query `payment_events` or select card data, provider secrets, `client_secret`, payment-method references, access/management/status tokens, or raw provider responses. Donor email/name and rendered bodies are not logged or stored in the outbox.
+
+For each monthly receipt, the worker creates a `mp1.payload.signature` bearer capability using HMAC-SHA256 and the backend-only `DONATION_MANAGEMENT_LINK_SECRET`. Its payload contains only version, purpose, and recurring donation UUID. The raw capability exists only while rendering and sending the message; neither it nor the URL is stored or logged. `cancel-recurring-donation` verifies the Web Crypto HMAC before reading the plan. Existing checkout-generated opaque links remain valid through the original SHA-256 hash lookup, while dotted signed-token forms never fall back to legacy lookup.
+
+A succeeded monthly donation is independently emailable from its plan's later lifecycle state. `pending` means initial reconciliation is incomplete and remains retryable. `active`, `cancelled`, and `past_due` plans all produce the already-earned receipt; only an active plan shows a next date. Every monthly receipt includes a management link, including one processed after cancellation.
 
 Delivery failure updates only the outbox. It cannot roll back donation success, campaign metrics, supporter activity, or recurring payment reconciliation. Failed work retries with bounded exponential delays for at most five claimed attempts.
 
@@ -109,9 +115,15 @@ Delivery failure updates only the outbox. It cannot roll back donation success, 
 2. Configure Edge Function secrets and deploy payment functions plus `process-donation-emails`.
 3. Configure the Hyperswitch profile webhook URL to `/functions/v1/hyperswitch-webhook` and ensure its signing key matches `HYPERSWITCH_WEBHOOK_SECRET`.
 4. Store project URL, publishable key, and `CRON_SECRET` in Supabase Vault; schedule `process-recurring-donations` with `pg_cron` and `pg_net`.
-5. Configure `BREVO_API_KEY`, `MISSIONPAY_EMAIL_FROM_NAME`, `MISSIONPAY_EMAIL_FROM_ADDRESS`, and optional `MISSIONPAY_EMAIL_REPLY_TO` as Edge Function secrets. Register and verify that sender in Brevo first. The migration schedules the email worker with the existing Vault URL and cron secret.
+5. Configure `BREVO_API_KEY`, `DONATION_MANAGEMENT_LINK_SECRET` (at least 32 random bytes), `MISSIONPAY_EMAIL_FROM_NAME`, `MISSIONPAY_EMAIL_FROM_ADDRESS`, and optional `MISSIONPAY_EMAIL_REPLY_TO` as Edge Function secrets. Register and verify that sender in Brevo first. The migration schedules the email worker with the existing Vault URL and cron secret.
 6. Configure the Vite public variables in Vercel and deploy the built application.
 7. Run one-time, initial monthly, subsequent MIT, failure, duplicate-webhook, email confirmation, and cancellation golden paths.
+
+```text
+First monthly donation → payment succeeds → plan active → receipt + signed management link
+  → management page → explicit cancellation confirmation → plan cancelled
+  → future recurring workers skip the plan; historical donations remain
+```
 
 ## Deferred lifecycle work
 

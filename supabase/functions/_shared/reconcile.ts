@@ -22,7 +22,7 @@ export async function reconcilePayment(admin: SupabaseClient, providerPayment: R
     const { data: recurring } = await admin.from("recurring_donations").select("billing_anchor_day, next_charge_at").eq("id", donation.recurring_donation_id).single();
     if (recurring) {
       const next = nextMonthlyDate(new Date(), recurring.billing_anchor_day);
-      await admin.from("recurring_donations").update({ status: "active", hyperswitch_payment_method_reference: methodId ?? null, next_charge_at: next.toISOString() }).eq("id", donation.recurring_donation_id);
+      await admin.from("recurring_donations").update({ status: "active", hyperswitch_payment_method_reference: methodId ?? null, next_charge_at: next.toISOString() }).eq("id", donation.recurring_donation_id).eq("status", "pending");
     }
   } else if (donation?.recurring_donation_id && status === "failed") {
     await admin.from("recurring_donations").update({ status: "past_due" }).eq("id", donation.recurring_donation_id).eq("status", "active");

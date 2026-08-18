@@ -31,6 +31,8 @@ describe("donation confirmation email", () => {
     expect(message.text).toContain("Frequency: One-time");
     expect(message.text).toContain("MissionPay reference: donation-123");
     expect(message.text).toContain("No real money moved");
+    expect(message.text).not.toContain("Manage monthly donation");
+    expect(message.html).not.toContain("manage-donation");
   });
 
   it("renders an active monthly occurrence and next charge date", () => {
@@ -39,11 +41,42 @@ describe("donation confirmation email", () => {
       frequency: "monthly",
       recurringStatus: "active",
       nextChargeAt: "2026-09-17T08:00:00.000Z",
+      managementUrl: "https://missionpay.example/manage-donation/mp1.payload.signature",
     });
     expect(message.text).toContain("Your monthly donation was confirmed.");
     expect(message.text).toContain("Frequency: Monthly");
     expect(message.text).toContain("Monthly donation: Active");
     expect(message.text).toContain("Next donation: Sep 17, 2026");
+    expect(message.html).toContain("Manage monthly donation");
+    expect(message.text).toContain("Manage monthly donation: https://missionpay.example/manage-donation/mp1.payload.signature");
+  });
+
+  it("renders a separate subsequent monthly receipt with its management link", () => {
+    const message = buildDonationConfirmationEmail({
+      ...baseDonation,
+      donationId: "donation-456",
+      frequency: "monthly",
+      recurringStatus: "active",
+      nextChargeAt: "2026-10-17T08:00:00.000Z",
+      managementUrl: "https://missionpay.example/manage-donation/mp1.next.signature",
+    });
+    expect(message.text).toContain("MissionPay reference: donation-456");
+    expect(message.text).toContain("Next donation: Oct 17, 2026");
+    expect(message.text).toContain("mp1.next.signature");
+  });
+
+  it("still renders a successful receipt after plan cancellation without a future date", () => {
+    const message = buildDonationConfirmationEmail({
+      ...baseDonation,
+      frequency: "monthly",
+      recurringStatus: "cancelled",
+      nextChargeAt: "2026-09-17T08:00:00.000Z",
+      managementUrl: "https://missionpay.example/manage-donation/mp1.cancelled.signature",
+    });
+    expect(message.text).toContain("Status: Confirmed");
+    expect(message.text).toContain("Monthly donation: Cancelled — no future charges");
+    expect(message.text).not.toContain("Next donation:");
+    expect(message.text).toContain("Manage monthly donation:");
   });
 
   it("keeps anonymous wording private while still producing the donor message", () => {
@@ -202,5 +235,7 @@ describe("worker payment-state isolation", () => {
     expect(source.default).not.toContain("request.json");
     expect(source.default).not.toContain("VITE_BREVO");
     expect(source.default).toContain("idempotencyKey: delivery.id");
+    expect(source.default).toContain('recurring.status === "pending"');
+    expect(source.default).not.toContain('recurring?.status !== "active"');
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { CalendarDays, CheckCircle2, ShieldCheck, XCircle } from "lucide-react";
 import { LoadingState } from "../components/States";
@@ -10,23 +10,36 @@ import type { RecurringDonation } from "../types/domain";
 export function ManageDonationPage() {
   const { token = "" } = useParams();
   const [plan, setPlan] = useState<RecurringDonation | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const keepButtonRef = useRef<HTMLButtonElement>(null);
   const load = useCallback(async () => {
     const { data, error: invokeError } = await supabase.functions.invoke("cancel-recurring-donation", { body: { management_token: token, action: "retrieve" } });
-    if (invokeError || !data?.id) setError("This management link is invalid or has expired."); else setPlan(data as RecurringDonation);
+    if (invokeError || !data?.id) setLoadError("This management link is invalid or has expired.");
+    else setPlan(data as RecurringDonation);
   }, [token]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (confirming) keepButtonRef.current?.focus();
+  }, [confirming]);
 
   const cancel = async () => {
-    if (!window.confirm("Cancel this monthly donation? Previous donations will remain part of the campaign.")) return;
     setBusy(true);
+    setActionError(null);
     const { error: invokeError } = await supabase.functions.invoke("cancel-recurring-donation", { body: { management_token: token, action: "cancel" } });
-    if (invokeError) setError("We could not cancel the monthly donation. Please try again."); else { track("monthly_donation_cancelled", { recurring_id: plan!.id }); await load(); }
+    if (invokeError) {
+      setActionError("We could not cancel the monthly donation. Please try again.");
+    } else {
+      track("monthly_donation_cancelled");
+      setPlan((current) => current ? { ...current, status: "cancelled", cancelled_at: new Date().toISOString() } : current);
+      setConfirming(false);
+    }
     setBusy(false);
   };
 
-  if (error) return <main className="status-page"><XCircle /><h1>We can’t open this plan</h1><p>{error}</p><Link to="/campaigns" className="button button--dark">Explore campaigns</Link></main>;
+  if (loadError) return <main className="status-page"><XCircle /><h1>We can’t open this plan</h1><p>{loadError}</p><Link to="/campaigns" className="button button--dark">Explore campaigns</Link></main>;
   if (!plan) return <main className="chapter container"><LoadingState label="Opening monthly donation" /></main>;
-  return <main className="manage-page"><div className="manage-card"><div className="manage-card__header"><ShieldCheck /><div><p className="eyebrow">Monthly donation</p><h1>{plan.campaign?.title}</h1></div><span className={`status-chip status-chip--${plan.status}`}>{plan.status.replace("_", " ")}</span></div><dl><div><dt>Monthly amount</dt><dd>{formatMoney(plan.amount_cents)}</dd></div><div><dt>Started</dt><dd>{formatDate(plan.started_at)}</dd></div><div><dt>Next charge</dt><dd>{plan.status === "active" ? formatDate(plan.next_charge_at) : "No future charge"}</dd></div></dl>{plan.status === "cancelled" ? <div className="cancelled-note"><CheckCircle2 /><p><strong>This monthly donation is cancelled.</strong> Previous donations remain part of the campaign, and no future charges will be created.</p></div> : <div className="manage-actions"><div><CalendarDays /><p>Your next gift is scheduled for {formatDate(plan.next_charge_at)}.</p></div><button className="button button--danger" onClick={() => void cancel()} disabled={busy}>{busy ? "Cancelling…" : "Cancel monthly donation"}</button></div>}</div></main>;
+  return <main className="manage-page"><div className="manage-card"><div className="manage-card__header"><ShieldCheck /><div><p className="eyebrow">Monthly donation</p><h1>{plan.campaign?.title}</h1></div><span className={`status-chip status-chip--${plan.status}`}>{plan.status.replace("_", " ")}</span></div><dl><div><dt>Monthly amount</dt><dd>{formatMoney(plan.amount_cents)}</dd></div><div><dt>Started</dt><dd>{formatDate(plan.started_at)}</dd></div><div><dt>Next charge</dt><dd>{plan.status === "active" ? formatDate(plan.next_charge_at) : "No future charge"}</dd></div></dl>{plan.status === "cancelled" ? <div className="cancelled-note"><CheckCircle2 /><p><strong>Your monthly donation is cancelled.</strong> You will not be charged again. Previous donations remain part of the campaign.</p></div> : plan.status === "active" ? <div className="manage-actions"><div><CalendarDays /><p>Your next gift is scheduled for {formatDate(plan.next_charge_at)}.</p></div><button className="button button--danger" onClick={() => { setActionError(null); setConfirming(true); }}>Cancel monthly donation</button></div> : <div className="cancelled-note"><XCircle /><p><strong>No future charge is scheduled.</strong> Previous donations remain part of the campaign.</p></div>}{confirming && <div className="confirmation-dialog" role="alertdialog" aria-modal="true" aria-labelledby="cancel-dialog-title" aria-describedby="cancel-dialog-description" onKeyDown={(event) => { if (event.key === "Escape" && !busy) setConfirming(false); }}><h2 id="cancel-dialog-title">Cancel your monthly donation?</h2><p id="cancel-dialog-description">Future monthly charges will stop. Previous donations will remain with the campaign.</p>{actionError && <p className="form-error" role="alert">{actionError}</p>}<div className="confirmation-dialog__actions"><button ref={keepButtonRef} className="button button--dark" onClick={() => { setActionError(null); setConfirming(false); }} disabled={busy}>No, keep my monthly donation</button><button className="button button--danger" onClick={() => void cancel()} disabled={busy}>{busy ? "Cancelling…" : "Yes, cancel monthly donation"}</button></div></div>}</div></main>;
 }

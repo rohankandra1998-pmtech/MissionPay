@@ -582,7 +582,7 @@ Cancellation must:
 4. Preserve the audit trail.
 5. Clearly tell the donor that previous donations are unaffected.
 
-For the MVP, recurring donation management can use a secure opaque management token.
+For the MVP, checkout-generated links use a secure opaque management token whose SHA-256 hash is stored. Monthly receipt emails use a backend-signed HMAC-SHA256 capability generated during rendering because the original opaque token is intentionally unrecoverable. The signed payload contains only its version, management purpose, and recurring donation UUID; the signing secret and raw capabilities are never stored or exposed client-side.
 
 Example route:
 
@@ -606,7 +606,11 @@ The management page should show:
 - Next charge date
 - Cancel monthly donation
 
-Do not expose payment credentials.
+Cancellation requires a second, explicit affirmative in-app choice. The safer choice must perform no mutation, and cancellation must remain idempotent.
+
+Every successful donation receives its own confirmation email. Each initial or subsequent monthly success includes current plan status and a management link. A receipt queued before later cancellation or `past_due` transition must still send; only an active plan presents a next charge date. One-time receipts contain no recurring-management control.
+
+Do not expose payment credentials, raw management capabilities, or the signing secret.
 
 ---
 
