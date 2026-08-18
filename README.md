@@ -74,6 +74,7 @@ npx supabase functions deploy hyperswitch-webhook --no-verify-jwt
 npx supabase functions deploy cancel-recurring-donation --no-verify-jwt
 npx supabase functions deploy process-recurring-donations --no-verify-jwt
 npx supabase functions deploy process-donation-emails --no-verify-jwt
+npx supabase functions deploy google-pay-diagnostic --no-verify-jwt
 ```
 
 These entry points disable the legacy platform JWT gate intentionally and implement their own controls: guest validation, random status/management capabilities, HMAC webhook authentication, or a dedicated cron secret. `process-donation-emails` accepts no recipient or message input and is not a general email relay.

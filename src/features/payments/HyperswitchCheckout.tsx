@@ -1,10 +1,11 @@
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { loadHyper } from "@juspay-tech/hyper-js";
 import { HyperElements, PaymentElement, useHyper, useWidgets } from "@juspay-tech/react-hyper-js";
 import { AlertCircle, LockKeyhole } from "lucide-react";
 import { track } from "../../lib/analytics";
 import { checkoutFailureCopy, checkoutFailureMessage, classifyCheckoutFailure, isPaymentFailureReason, resultRequiresSdkRedirect } from "../../lib/paymentFailure";
 import { supabase } from "../../lib/supabase";
+import { installGooglePayDiagnostics } from "../../lib/googlePayDiagnostics";
 import type { PaymentFailureReason } from "../../types/domain";
 import type { DonationFrequency } from "../../types/domain";
 
@@ -27,6 +28,13 @@ export function CheckoutForm({ donationId, statusToken, managementToken, frequen
   const [message, setMessage] = useState<string | null>(null);
   const submission = useRef(0);
   const statusUrl = `${window.location.origin}/donation/${donationId}/success`;
+
+  useEffect(() => installGooglePayDiagnostics({
+    donationId,
+    report: (event) => supabase.functions.invoke("google-pay-diagnostic", {
+      body: { donation_id: donationId, status_token: statusToken, ...event },
+    }),
+  }), [donationId, statusToken]);
 
   const reconcileFailure = (submissionId: number, fallbackReason: PaymentFailureReason) => {
     void supabase.functions.invoke("payment-status", { body: { donation_id: donationId, status_token: statusToken } })
