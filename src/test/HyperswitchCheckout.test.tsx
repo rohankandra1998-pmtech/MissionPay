@@ -38,6 +38,36 @@ describe("Hyperswitch checkout confirmation", () => {
   });
   afterEach(cleanup);
 
+  it("stores the status capability on mount before any form submission", () => {
+    renderCheckout(vi.fn(), "one_time", "wallet-donation");
+
+    expect(sessionStorage.getItem("missionpay:donation:wallet-donation")).toBe("status-token-which-is-long-and-random");
+    expect(confirmPayment).not.toHaveBeenCalled();
+  });
+
+  it("stores the optional management capability on mount", () => {
+    render(<CheckoutForm donationId="monthly-wallet" statusToken="status-capability" managementToken="management-capability" frequency="monthly" />);
+
+    expect(sessionStorage.getItem("missionpay:donation:monthly-wallet")).toBe("status-capability");
+    expect(sessionStorage.getItem("missionpay:management:monthly-wallet")).toBe("management-capability");
+    expect(confirmPayment).not.toHaveBeenCalled();
+  });
+
+  it("does not create a management entry when no management capability is provided", () => {
+    render(<CheckoutForm donationId="one-time-wallet" statusToken="status-capability" frequency="one_time" />);
+
+    expect(sessionStorage.getItem("missionpay:management:one-time-wallet")).toBeNull();
+  });
+
+  it("updates session capabilities when the donation capability props change", () => {
+    const view = render(<CheckoutForm donationId="donation-a" statusToken="status-a" managementToken="management-a" frequency="monthly" />);
+
+    view.rerender(<CheckoutForm donationId="donation-b" statusToken="status-b" managementToken="management-b" frequency="monthly" />);
+
+    expect(sessionStorage.getItem("missionpay:donation:donation-b")).toBe("status-b");
+    expect(sessionStorage.getItem("missionpay:management:donation-b")).toBe("management-b");
+  });
+
   it("keeps an immediate decline inline, presents only MissionPay copy, and starts background reconciliation", async () => {
     confirmPayment.mockResolvedValue({
       submitSuccessful: true,
@@ -156,6 +186,27 @@ describe("Hyperswitch checkout confirmation", () => {
     const failureEvent = analytics.mock.calls.map(([event]) => (event as CustomEvent).detail).find((detail) => detail.event === "payment_failed");
     expect(failureEvent).toEqual({ event: "payment_failed", properties: { donation_id: "donation-1", failure_reason: "stolen_card" } });
     expect(JSON.stringify(failureEvent)).not.toContain("secret risk rule");
+    window.removeEventListener("missionpay:analytics", analytics);
+  });
+
+  it("never places checkout capabilities in payment URLs, PaymentElement options, or analytics", async () => {
+    const analytics = vi.fn();
+    window.addEventListener("missionpay:analytics", analytics);
+    confirmPayment.mockResolvedValue({ status: "succeeded" });
+    render(<CheckoutForm donationId="safe-handoff" statusToken="status-secret-value" managementToken="management-secret-value" frequency="monthly" continueToStatus={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Complete secure donation" }));
+    await waitFor(() => expect(confirmPayment).toHaveBeenCalledOnce());
+
+    const observablePaymentData = JSON.stringify({
+      confirmPayment: confirmPayment.mock.calls,
+      paymentElement: paymentElementOptions.mock.calls,
+      analytics: analytics.mock.calls.map(([event]) => (event as CustomEvent).detail),
+    });
+    expect(observablePaymentData).not.toContain("status-secret-value");
+    expect(observablePaymentData).not.toContain("management-secret-value");
+    expect(observablePaymentData).not.toContain("status_token");
+    expect(observablePaymentData).not.toContain("management_token");
     window.removeEventListener("missionpay:analytics", analytics);
   });
 

@@ -29,6 +29,11 @@ export function CheckoutForm({ donationId, statusToken, managementToken, frequen
   const submission = useRef(0);
   const statusUrl = `${window.location.origin}/donation/${donationId}/success`;
 
+  useEffect(() => {
+    sessionStorage.setItem(`missionpay:donation:${donationId}`, statusToken);
+    if (managementToken) sessionStorage.setItem(`missionpay:management:${donationId}`, managementToken);
+  }, [donationId, statusToken, managementToken]);
+
   useEffect(() => installGooglePayDiagnostics({
     donationId,
     report: (event) => supabase.functions.invoke("google-pay-diagnostic", {
@@ -70,8 +75,6 @@ export function CheckoutForm({ donationId, statusToken, managementToken, frequen
     const submissionId = ++submission.current;
     setProcessing(true);
     setMessage(null);
-    sessionStorage.setItem(`missionpay:donation:${donationId}`, statusToken);
-    if (managementToken) sessionStorage.setItem(`missionpay:management:${donationId}`, managementToken);
     track("payment_submitted", { donation_id: donationId });
     try {
       const result = await hyper.confirmPayment({
