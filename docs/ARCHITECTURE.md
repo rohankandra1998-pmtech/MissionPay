@@ -122,6 +122,7 @@ Delivery failure updates only the outbox. It cannot roll back donation success, 
 4. Store project URL, publishable key, and `CRON_SECRET` in Supabase Vault; schedule `process-recurring-donations` with `pg_cron` and `pg_net`.
 5. Configure `BREVO_API_KEY`, `DONATION_MANAGEMENT_LINK_SECRET` (at least 32 random bytes), `MISSIONPAY_EMAIL_FROM_NAME`, `MISSIONPAY_EMAIL_FROM_ADDRESS`, and optional `MISSIONPAY_EMAIL_REPLY_TO` as Edge Function secrets. Register and verify that sender in Brevo first. The migration schedules the email worker with the existing Vault URL and cron secret.
 6. Configure the Vite public variables in Vercel and deploy the built application.
+   The root `vercel.json` catch-all rewrite serves Vite's `index.html` for direct `BrowserRouter` routes, including payment return URLs, while React Router decides the application route.
 7. Run one-time, initial monthly, subsequent MIT, failure, duplicate-webhook, email confirmation, and cancellation golden paths.
 
 ```text
