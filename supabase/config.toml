@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.process-donation-emails]
 verify_jwt = false
+
+[functions.google-pay-diagnostic]
+verify_jwt = false

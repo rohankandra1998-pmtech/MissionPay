@@ -2,10 +2,12 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { classifyCheckoutFailure } from "../lib/paymentFailure";
 
-const { confirmPayment, invoke, paymentElementOptions } = vi.hoisted(() => ({
+const { confirmPayment, invoke, paymentElementOptions, installGooglePayDiagnostics, stopGooglePayDiagnostics } = vi.hoisted(() => ({
   confirmPayment: vi.fn(),
   invoke: vi.fn(),
   paymentElementOptions: vi.fn(),
+  installGooglePayDiagnostics: vi.fn(),
+  stopGooglePayDiagnostics: vi.fn(),
 }));
 
 vi.mock("@juspay-tech/hyper-js", () => ({ loadHyper: vi.fn(() => Promise.resolve({})) }));
@@ -16,6 +18,7 @@ vi.mock("@juspay-tech/react-hyper-js", () => ({
   useWidgets: () => ({ id: "widgets" }),
 }));
 vi.mock("../lib/supabase", () => ({ supabase: { functions: { invoke } } }));
+vi.mock("../lib/googlePayDiagnostics", () => ({ installGooglePayDiagnostics }));
 
 import { CheckoutForm } from "../features/payments/HyperswitchCheckout";
 
@@ -29,6 +32,8 @@ describe("Hyperswitch checkout confirmation", () => {
     confirmPayment.mockReset();
     invoke.mockReset().mockResolvedValue({ data: null, error: null });
     paymentElementOptions.mockReset();
+    installGooglePayDiagnostics.mockReset().mockReturnValue(stopGooglePayDiagnostics);
+    stopGooglePayDiagnostics.mockReset();
     sessionStorage.clear();
   });
   afterEach(cleanup);
@@ -171,6 +176,16 @@ describe("Hyperswitch checkout confirmation", () => {
     }));
     const options = paymentElementOptions.mock.calls[0][0] as Record<string, unknown>;
     expect(options.wallets).not.toHaveProperty("googlePay");
+  });
+
+  it("mounts and cleans up the isolated Google Pay diagnostic observer", () => {
+    const view = render(<CheckoutForm donationId="donation-observer" statusToken="status-token-which-is-long-and-random" frequency="one_time" />);
+    expect(installGooglePayDiagnostics).toHaveBeenCalledWith(expect.objectContaining({ donationId: "donation-observer", report: expect.any(Function) }));
+    const observer = installGooglePayDiagnostics.mock.calls[0][0] as { report: (event: { event_type: string }) => unknown };
+    observer.report({ event_type: "hook_installed" });
+    expect(invoke).toHaveBeenCalledWith("google-pay-diagnostic", { body: { donation_id: "donation-observer", status_token: "status-token-which-is-long-and-random", event_type: "hook_installed" } });
+    view.unmount();
+    expect(stopGooglePayDiagnostics).toHaveBeenCalledOnce();
   });
 
   it("does not request saved-payment controls for one-time donations", () => {
