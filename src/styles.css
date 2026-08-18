@@ -242,6 +242,8 @@ p { line-height: 1.65; }
 .payment-heading > span { width: 35px; height: 35px; display:grid; place-items:center; background: var(--sage); border-radius: 50%; }
 .payment-heading h2, .payment-heading p { margin: 0; }
 .payment-form .button { margin-top: 22px; }
+.monthly-vault-note { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 18px; padding: 14px 16px; border-radius: 10px; background: var(--sage); color: var(--ink-soft); font-size: .82rem; line-height: 1.5; }
+.monthly-vault-note svg { flex: 0 0 auto; margin-top: 2px; color: var(--coral-dark); }
 .inline-error { display: flex; gap: 9px; margin-top: 18px; }
 .inline-error p { margin: 0; }
 
@@ -267,6 +269,9 @@ p { line-height: 1.65; }
 .confirmation-card button { border: 0; background: transparent; cursor: pointer; }
 .monthly-active { width: min(100%, 650px); padding: 18px; border-radius: 10px; background: var(--sage); display: flex; gap: 12px; text-align: left; }
 .monthly-active p { margin: 3px 0 0; font-size: .83rem; }
+.monthly-setup-incomplete { width: min(100%, 650px); padding: 18px; border-radius: 10px; background: #fff0e9; color: var(--ink); display: flex; gap: 12px; text-align: left; }
+.monthly-setup-incomplete > svg { flex: 0 0 auto; color: var(--coral-dark); }
+.monthly-setup-incomplete p { margin: 3px 0 0; color: var(--ink-soft); font-size: .83rem; }
 .status-actions { display: flex; gap: 12px; margin-top: 30px; }
 .not-found-mark { color: var(--coral); font-weight: 800; letter-spacing: .2em; }
 

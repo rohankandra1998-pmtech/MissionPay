@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { json } from "../_shared/cors.ts";
 import { adminClient } from "../_shared/database.ts";
 import { createManagementCapability } from "../_shared/managementCapability.ts";
+import { hasRecurringChargeCredentials } from "../_shared/recurring.ts";
 import {
   buildDonationConfirmationEmail,
   EmailConfigurationError,
@@ -58,7 +59,7 @@ Deno.serve(async (request) => {
     try {
       const { data: donation, error: donationError } = await admin
         .from("donations")
-        .select("id, amount_cents, currency, frequency, is_anonymous, status, completed_at, donor:donors(name, email), campaign:campaigns(title, slug), recurring:recurring_donations(id, status, next_charge_at)")
+        .select("id, amount_cents, currency, frequency, is_anonymous, status, completed_at, donor:donors(name, email), campaign:campaigns(title, slug), recurring:recurring_donations(id, status, next_charge_at, hyperswitch_customer_id, hyperswitch_payment_method_reference)")
         .eq("id", delivery.donation_id)
         .single();
       if (donationError || !donation || donation.status !== "succeeded" || !donation.completed_at) {
@@ -97,6 +98,7 @@ Deno.serve(async (request) => {
         isAnonymous: donation.is_anonymous,
         completedAt: donation.completed_at,
         recurringStatus: recurring?.status,
+        recurringPaymentMethodReady: Boolean(recurring && hasRecurringChargeCredentials(recurring)),
         nextChargeAt: recurring?.next_charge_at,
         managementUrl: recurringManagementUrl,
         sandbox: (Deno.env.get("HYPERSWITCH_BASE_URL") ?? "").includes("sandbox"),

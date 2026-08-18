@@ -95,6 +95,8 @@ Private trigger functions live in the unexposed `private` schema with an empty `
 - `payment_events.provider_event_id` makes delivery idempotent.
 - `provider_updated_at` prevents an older webhook from rolling state backwards.
 - A unique `(recurring_donation_id, billing_period_start)` index prevents a double monthly charge when workers overlap.
+- `recurring_donations.status = 'active'` is an application invariant requiring non-empty Hyperswitch customer and payment-method references. Initial payment success alone never activates a plan. A definitive missing reusable method leaves the donation succeeded and moves only the recurring plan to the existing non-chargeable `past_due` state.
+- The recurring worker revalidates both references before inserting a donation or contacting Hyperswitch. Inconsistent legacy rows are moved out of `active` and reported as `missing_payment_method` without exposing the reference.
 - Cancellation changes future scheduling only; historical donations remain immutable.
 - Recurring state updates are conditioned on the plan still being in the expected state, so reconciliation or an MIT result cannot reactivate or overwrite a concurrently cancelled plan.
 - Recurring schedules preserve the donor's anonymity choice and an immutable consent timestamp for every future occurrence.
@@ -105,7 +107,9 @@ Email delivery begins only at the database boundary where backend reconciliation
 
 For each monthly receipt, the worker creates a `mp1.payload.signature` bearer capability using HMAC-SHA256 and the backend-only `DONATION_MANAGEMENT_LINK_SECRET`. Its payload contains only version, purpose, and recurring donation UUID. The raw capability exists only while rendering and sending the message; neither it nor the URL is stored or logged. `cancel-recurring-donation` verifies the Web Crypto HMAC before reading the plan. Existing checkout-generated opaque links remain valid through the original SHA-256 hash lookup, while dotted signed-token forms never fall back to legacy lookup.
 
-A succeeded monthly donation is independently emailable from its plan's later lifecycle state. `pending` means initial reconciliation is incomplete and remains retryable. `active`, `cancelled`, and `past_due` plans all produce the already-earned receipt; only an active plan shows a next date. Every monthly receipt includes a management link, including one processed after cancellation.
+A succeeded monthly donation is independently emailable from its plan's later lifecycle state. `pending` means initial reconciliation is incomplete and remains retryable. `active`, `cancelled`, and `past_due` plans all produce the already-earned receipt; only an active plan with both reusable charging references shows a next date. Missing initial tokenization is described as setup incomplete rather than as a missed payment. Every monthly receipt includes a management link, including one processed after cancellation.
+
+Browser and management responses expose only `recurring_payment_method_ready`; the actual Hyperswitch reference remains backend-only. The success and management pages require both `status = active` and readiness before advertising a future charge.
 
 Delivery failure updates only the outbox. It cannot roll back donation success, campaign metrics, supporter activity, or recurring payment reconciliation. Failed work retries with bounded exponential delays for at most five claimed attempts.
 
@@ -120,7 +124,7 @@ Delivery failure updates only the outbox. It cannot roll back donation success, 
 7. Run one-time, initial monthly, subsequent MIT, failure, duplicate-webhook, email confirmation, and cancellation golden paths.
 
 ```text
-First monthly donation → payment succeeds → plan active → receipt + signed management link
+First monthly donation → payment succeeds → reusable method confirmed → plan active → receipt + signed management link
   → management page → explicit cancellation confirmation → plan cancelled
   → future recurring workers skip the plan; historical donations remain
 ```

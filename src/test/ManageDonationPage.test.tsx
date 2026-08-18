@@ -18,6 +18,7 @@ const activePlan = {
   started_at: "2026-08-17T08:00:00.000Z",
   next_charge_at: "2026-09-17T08:00:00.000Z",
   cancelled_at: null,
+  recurring_payment_method_ready: true,
   campaign: { title: "Clean Water", slug: "clean-water" },
 };
 
@@ -60,5 +61,13 @@ describe("monthly donation cancellation UI", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Cancel monthly donation" }));
     expect(confirm).not.toHaveBeenCalled();
     confirm.mockRestore();
+  });
+
+  it("shows no future charge or cancellation control when recurring setup is incomplete", async () => {
+    invoke.mockReset().mockResolvedValueOnce({ data: { ...activePlan, recurring_payment_method_ready: false, next_charge_at: null }, error: null });
+    renderPage();
+    expect(await screen.findByText("Future monthly donations are not active.")).toBeInTheDocument();
+    expect(screen.getByText("No future charge")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel monthly donation" })).not.toBeInTheDocument();
   });
 });

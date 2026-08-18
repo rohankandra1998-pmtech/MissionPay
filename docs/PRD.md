@@ -564,6 +564,8 @@ For MVP:
 - Automatic failed-payment retry strategy: deferred
 - Failed recurring charge should surface as `past_due` or equivalent MissionPay status
 
+An active recurring plan requires non-empty provider customer and reusable payment-method references. A successful initial donation without a reusable method remains a successful donation, but future monthly setup is incomplete and no automatic charge date is advertised. Unified Checkout keeps its provider-managed save-card consent visible and defaults it on only for monthly donations.
+
 For dates such as the 29th, 30th, or 31st, billing logic should use a deterministic end-of-month-safe strategy.
 
 For example, if the corresponding date does not exist, charge on the final calendar day of the target month.

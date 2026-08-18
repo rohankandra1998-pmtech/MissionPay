@@ -118,7 +118,7 @@ Before a demo, verify:
 
 1. One-time sandbox success changes both campaign and dashboard totals.
 2. A failing sandbox payment does not change totals and can be retried.
-3. Monthly checkout displays unselected explicit consent and stores a payment method after success.
+3. Monthly checkout requires MissionPay recurring consent, visibly defaults Hyperswitch's save-payment-method control on, and becomes active only after a reusable method reference is confirmed.
 4. The protected development trigger runs the real MIT worker and creates a second donation/payment.
 5. Sending the same webhook twice creates one payment event and one state transition.
 6. Each initial and subsequent successful monthly charge receives its own receipt and secure management link.
@@ -126,13 +126,15 @@ Before a demo, verify:
 
 ### Monthly donation golden path
 
-1. Create a monthly sandbox donation, complete Hyperswitch checkout, and confirm the donation succeeds and the plan becomes active.
+1. Create a new monthly sandbox donation. Confirm **Save card details** is visible and selected by default, leave it selected, complete checkout, and verify the donation succeeds, the plan is active, and `hyperswitch_payment_method_reference` is non-null.
 2. Confirm the first receipt is delivered with the monthly amount, next donation date, and **Manage monthly donation** link.
 3. Use the ownership-protected development recurring-cycle trigger to run one additional cycle. Confirm Hyperswitch creates an off-session payment without card re-entry, exactly one new succeeded donation is recorded, totals update once, and a second receipt with a management link arrives.
 4. Open the management link and confirm campaign, monthly amount, status, start date, and next charge display.
 5. Click **Cancel monthly donation**, choose **No**, and confirm the plan remains active.
 6. Start cancellation again, choose **Yes**, and confirm the plan is cancelled while both historical donations remain.
 7. Trigger another development cycle and confirm no payment or donation is created for the cancelled plan.
+
+For the negative guard path, create another monthly donation and uncheck **Save card details** if Hyperswitch permits it. The initial donation should still succeed, but the recurring plan must remain non-active, no next automatic charge may be shown, and the development worker must not create a donation or call Hyperswitch for that plan.
 
 ## Documentation
 

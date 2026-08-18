@@ -2,8 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { adminClient } from "../_shared/database.ts";
 import { cancelManagementPlan, resolveManagementPlan, type ManagementPlanStore } from "../_shared/managementCapability.ts";
+import { hasRecurringChargeCredentials } from "../_shared/recurring.ts";
 
-const planSelection = "id, campaign_id, amount_cents, currency, status, started_at, next_charge_at, cancelled_at, campaign:campaigns(title, slug)";
+const planSelection = "id, campaign_id, amount_cents, currency, status, started_at, next_charge_at, cancelled_at, hyperswitch_customer_id, hyperswitch_payment_method_reference, campaign:campaigns(title, slug)";
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(request) });
@@ -35,7 +36,20 @@ Deno.serve(async (request) => {
     }
     if (action !== "retrieve") return json(request, { error: "Unsupported action." }, 400);
     const campaign = Array.isArray(recurring.campaign) ? recurring.campaign[0] : recurring.campaign;
-    return json(request, { ...recurring, campaign });
+    const recurringPaymentMethodReady = hasRecurringChargeCredentials(recurring);
+    const recurringChargeable = recurring.status === "active" && recurringPaymentMethodReady;
+    return json(request, {
+      id: recurring.id,
+      campaign_id: recurring.campaign_id,
+      amount_cents: recurring.amount_cents,
+      currency: recurring.currency,
+      status: recurring.status,
+      started_at: recurring.started_at,
+      next_charge_at: recurringChargeable ? recurring.next_charge_at : null,
+      cancelled_at: recurring.cancelled_at,
+      recurring_payment_method_ready: recurringPaymentMethodReady,
+      campaign,
+    });
   } catch (error) {
     console.error("cancel-recurring-donation failed", error instanceof Error ? error.message : "unknown error");
     return json(request, { error: "Monthly donation management is temporarily unavailable." }, 500);

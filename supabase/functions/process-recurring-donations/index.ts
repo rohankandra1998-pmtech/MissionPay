@@ -4,6 +4,7 @@ import { randomToken, sha256 } from "../_shared/crypto.ts";
 import { adminClient, userClient } from "../_shared/database.ts";
 import { createPayment, nextMonthlyDate } from "../_shared/hyperswitch.ts";
 import { buildPaymentAttemptUpdate, deriveMissionPayStatus } from "../_shared/paymentFailure.ts";
+import { hasRecurringChargeCredentials } from "../_shared/recurring.ts";
 
 async function authorized(request: Request, recurringId?: string) {
   const cronSecret = Deno.env.get("CRON_SECRET");
@@ -33,6 +34,11 @@ Deno.serve(async (request) => {
     if (queryError) throw queryError;
     const results: Array<Record<string, unknown>> = [];
     for (const plan of plans ?? []) {
+      if (!hasRecurringChargeCredentials(plan)) {
+        await admin.from("recurring_donations").update({ status: "past_due" }).eq("id", plan.id).eq("status", "active");
+        results.push({ recurring_id: plan.id, status: "missing_payment_method" });
+        continue;
+      }
       const periodStart = new Date(plan.next_charge_at).toISOString().slice(0, 10);
       const accessToken = randomToken();
       const { data: donation, error: donationError } = await admin.from("donations").insert({ campaign_id: plan.campaign_id, donor_id: plan.donor_id, recurring_donation_id: plan.id, amount_cents: plan.amount_cents, currency: "USD", frequency: "monthly", is_anonymous: plan.is_anonymous, status: "pending", access_token_hash: await sha256(accessToken), billing_period_start: periodStart }).select("id").single();

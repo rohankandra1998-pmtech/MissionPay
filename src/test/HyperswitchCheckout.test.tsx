@@ -2,15 +2,16 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { classifyCheckoutFailure } from "../lib/paymentFailure";
 
-const { confirmPayment, invoke } = vi.hoisted(() => ({
+const { confirmPayment, invoke, paymentElementOptions } = vi.hoisted(() => ({
   confirmPayment: vi.fn(),
   invoke: vi.fn(),
+  paymentElementOptions: vi.fn(),
 }));
 
 vi.mock("@juspay-tech/hyper-js", () => ({ loadHyper: vi.fn(() => Promise.resolve({})) }));
 vi.mock("@juspay-tech/react-hyper-js", () => ({
   HyperElements: ({ children }: { children: React.ReactNode }) => children,
-  PaymentElement: () => <div>Secure payment fields</div>,
+  PaymentElement: ({ options }: { options: Record<string, unknown> }) => { paymentElementOptions(options); return <div>Secure payment fields</div>; },
   useHyper: () => ({ confirmPayment }),
   useWidgets: () => ({ id: "widgets" }),
 }));
@@ -18,8 +19,8 @@ vi.mock("../lib/supabase", () => ({ supabase: { functions: { invoke } } }));
 
 import { CheckoutForm } from "../features/payments/HyperswitchCheckout";
 
-function renderCheckout(continueToStatus = vi.fn()) {
-  render(<CheckoutForm donationId="donation-1" statusToken="status-token-which-is-long-and-random" continueToStatus={continueToStatus} />);
+function renderCheckout(continueToStatus = vi.fn(), frequency: "one_time" | "monthly" = "one_time") {
+  render(<CheckoutForm donationId="donation-1" statusToken="status-token-which-is-long-and-random" frequency={frequency} continueToStatus={continueToStatus} />);
   return continueToStatus;
 }
 
@@ -27,6 +28,7 @@ describe("Hyperswitch checkout confirmation", () => {
   beforeEach(() => {
     confirmPayment.mockReset();
     invoke.mockReset().mockResolvedValue({ data: null, error: null });
+    paymentElementOptions.mockReset();
     sessionStorage.clear();
   });
   afterEach(cleanup);
@@ -143,6 +145,23 @@ describe("Hyperswitch checkout confirmation", () => {
     expect(failureEvent).toEqual({ event: "payment_failed", properties: { donation_id: "donation-1", failure_reason: "stolen_card" } });
     expect(JSON.stringify(failureEvent)).not.toContain("secret risk rule");
     window.removeEventListener("missionpay:analytics", analytics);
+  });
+
+  it("shows and defaults Hyperswitch's saved-payment consent control for monthly donations", () => {
+    renderCheckout(vi.fn(), "monthly");
+    expect(paymentElementOptions).toHaveBeenCalledWith(expect.objectContaining({
+      displaySavedPaymentMethodsCheckbox: true,
+      savedPaymentMethodsCheckboxCheckedByDefault: true,
+    }));
+    expect(screen.getByText(/securely saved by Hyperswitch/i)).toBeInTheDocument();
+  });
+
+  it("does not request saved-payment controls for one-time donations", () => {
+    renderCheckout();
+    const options = paymentElementOptions.mock.calls[0][0] as Record<string, unknown>;
+    expect(options).not.toHaveProperty("displaySavedPaymentMethodsCheckbox");
+    expect(options).not.toHaveProperty("savedPaymentMethodsCheckboxCheckedByDefault");
+    expect(screen.queryByText(/securely saved by Hyperswitch/i)).not.toBeInTheDocument();
   });
 });
 

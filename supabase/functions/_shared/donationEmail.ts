@@ -9,6 +9,7 @@ export type DonationConfirmationData = {
   isAnonymous: boolean;
   completedAt: string;
   recurringStatus?: string | null;
+  recurringPaymentMethodReady?: boolean;
   nextChargeAt?: string | null;
   managementUrl?: string | null;
   sandbox: boolean;
@@ -78,8 +79,9 @@ function formatDate(value: string) {
 
 export function buildDonationConfirmationEmail(data: DonationConfirmationData): DonationConfirmationMessage {
   const amount = formatAmount(data.amountCents, data.currency);
-  const isActiveMonthly = data.frequency === "monthly" && data.recurringStatus === "active";
+  const isActiveMonthly = data.frequency === "monthly" && data.recurringStatus === "active" && data.recurringPaymentMethodReady === true;
   const isCancelledMonthly = data.frequency === "monthly" && data.recurringStatus === "cancelled";
+  const isIncompleteMonthly = data.frequency === "monthly" && !isCancelledMonthly && data.recurringPaymentMethodReady !== true;
   const title = escapeHtml(data.campaignTitle);
   const greeting = escapeHtml(data.donorName.trim() || "Supporter");
   const reference = escapeHtml(data.donationId);
@@ -94,7 +96,7 @@ export function buildDonationConfirmationEmail(data: DonationConfirmationData): 
     ? `<tr><td style="padding:7px 0;color:#687076">Next donation</td><td style="padding:7px 0;text-align:right;font-weight:600">${escapeHtml(formatDate(data.nextChargeAt))}</td></tr>`
     : "";
   const monthlyStatus = data.frequency === "monthly"
-    ? `<tr><td style="padding:7px 0;color:#687076">Monthly donation</td><td style="padding:7px 0;text-align:right;font-weight:600">${isActiveMonthly ? "Active" : isCancelledMonthly ? "Cancelled — no future charges" : "Past due — no future charge scheduled"}</td></tr>`
+    ? `<tr><td style="padding:7px 0;color:#687076">Monthly donation</td><td style="padding:7px 0;text-align:right;font-weight:600">${isActiveMonthly ? "Active" : isCancelledMonthly ? "Cancelled — no future charges" : isIncompleteMonthly ? "Setup incomplete — no future charges scheduled" : "Past due — no future charge scheduled"}</td></tr>`
     : "";
   const managementUrl = data.frequency === "monthly" && data.managementUrl ? escapeHtml(data.managementUrl) : null;
   const managementAction = managementUrl
@@ -112,7 +114,7 @@ export function buildDonationConfirmationEmail(data: DonationConfirmationData): 
     data.sandbox ? "SANDBOX TRANSACTION: This was a sandbox/test transaction. No real money moved." : "",
     `${data.frequency === "monthly" ? "Amount today" : "Amount"}: ${amount} ${data.currency}`,
     `Frequency: ${frequency}`,
-    data.frequency === "monthly" ? `Monthly donation: ${isActiveMonthly ? "Active" : isCancelledMonthly ? "Cancelled — no future charges" : "Past due — no future charge scheduled"}` : "",
+    data.frequency === "monthly" ? `Monthly donation: ${isActiveMonthly ? "Active" : isCancelledMonthly ? "Cancelled — no future charges" : isIncompleteMonthly ? "Setup incomplete — no future charges scheduled" : "Past due — no future charge scheduled"}` : "",
     isActiveMonthly && data.nextChargeAt ? `Next donation: ${formatDate(data.nextChargeAt)}` : "",
     "Status: Confirmed", `MissionPay reference: ${data.donationId}`, `Confirmed: ${formatTimestamp(data.completedAt)}`,
     data.isAnonymous ? "Your donation is shown publicly as Anonymous." : "", "",

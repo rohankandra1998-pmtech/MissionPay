@@ -40,6 +40,7 @@ describe("donation confirmation email", () => {
       ...baseDonation,
       frequency: "monthly",
       recurringStatus: "active",
+      recurringPaymentMethodReady: true,
       nextChargeAt: "2026-09-17T08:00:00.000Z",
       managementUrl: "https://missionpay.example/manage-donation/mp1.payload.signature",
     });
@@ -57,6 +58,7 @@ describe("donation confirmation email", () => {
       donationId: "donation-456",
       frequency: "monthly",
       recurringStatus: "active",
+      recurringPaymentMethodReady: true,
       nextChargeAt: "2026-10-17T08:00:00.000Z",
       managementUrl: "https://missionpay.example/manage-donation/mp1.next.signature",
     });
@@ -75,6 +77,22 @@ describe("donation confirmation email", () => {
     });
     expect(message.text).toContain("Status: Confirmed");
     expect(message.text).toContain("Monthly donation: Cancelled — no future charges");
+    expect(message.text).not.toContain("Next donation:");
+    expect(message.text).toContain("Manage monthly donation:");
+  });
+
+  it("confirms the first donation but reports incomplete recurring setup without a future date", () => {
+    const message = buildDonationConfirmationEmail({
+      ...baseDonation,
+      frequency: "monthly",
+      recurringStatus: "past_due",
+      recurringPaymentMethodReady: false,
+      nextChargeAt: "2026-09-17T08:00:00.000Z",
+      managementUrl: "https://missionpay.example/manage-donation/mp1.incomplete.signature",
+    });
+    expect(message.text).toContain("Status: Confirmed");
+    expect(message.text).toContain("Monthly donation: Setup incomplete — no future charges scheduled");
+    expect(message.text).not.toContain("Monthly donation: Active");
     expect(message.text).not.toContain("Next donation:");
     expect(message.text).toContain("Manage monthly donation:");
   });
