@@ -26,6 +26,7 @@ export function CheckoutForm({ donationId, statusToken, managementToken, frequen
   const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const submission = useRef(0);
+  const statusUrl = `${window.location.origin}/donation/${donationId}/success`;
 
   const reconcileFailure = (submissionId: number, fallbackReason: PaymentFailureReason) => {
     void supabase.functions.invoke("payment-status", { body: { donation_id: donationId, status_token: statusToken } })
@@ -64,7 +65,6 @@ export function CheckoutForm({ donationId, statusToken, managementToken, frequen
     sessionStorage.setItem(`missionpay:donation:${donationId}`, statusToken);
     if (managementToken) sessionStorage.setItem(`missionpay:management:${donationId}`, managementToken);
     track("payment_submitted", { donation_id: donationId });
-    const statusUrl = `${window.location.origin}/donation/${donationId}/success`;
     try {
       const result = await hyper.confirmPayment({
         elements: widgets,
@@ -97,6 +97,7 @@ export function CheckoutForm({ donationId, statusToken, managementToken, frequen
         layout: { type: "accordion", defaultCollapsed: false, radios: true, spacedAccordionItems: false },
         branding: "never",
         paymentMethodsHeaderText: "Choose a secure payment method",
+        wallets: { walletReturnUrl: statusUrl },
         ...(frequency === "monthly" ? {
           displaySavedPaymentMethodsCheckbox: true,
           savedPaymentMethodsCheckboxCheckedByDefault: true,

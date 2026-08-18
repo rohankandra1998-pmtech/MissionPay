@@ -41,7 +41,7 @@ Supabase Cron + pg_net
 - Route-level lazy loading keeps fundraiser and payment SDK code out of the first landing-page chunk.
 - Supabase publishable keys are the only Supabase keys available to browser code.
 - The donation flow collects no card data. The official Hyperswitch `PaymentElement` renders the secure payment UI.
-- Unified Checkout uses `redirect: "if_required"`. The SDK owns required redirects/3DS; direct no-error results go to MissionPay's status route, where success is decided exclusively from reconciled backend state.
+- Unified Checkout configures Hyperswitch's required wallet return URL on the `PaymentElement` and uses the same donation status route for `confirmPayment` with `redirect: "if_required"`. Wallet visibility remains SDK-controlled. The SDK owns required wallet/3DS redirects; direct no-error results go to MissionPay's status route, where success is decided exclusively from reconciled backend state.
 - Immediate SDK errors stay inline and trigger a best-effort background `payment-status` reconciliation using the random status token stored only in the browser session. That sync never blocks a retry and can replace generic inline copy with a more specific backend-normalized reason; redirect query parameters are not trusted.
 - Failed confirmations render from a MissionPay-owned normalized reason. Client analytics contain only donation ID plus the safe taxonomy; browser and status views never render connector, issuer, risk, or arbitrary SDK messages.
 - The fundraiser dashboard derives totals from rows returned under RLS; it does not contain demo financial constants.
