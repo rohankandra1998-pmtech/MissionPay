@@ -1012,9 +1012,9 @@ The function should:
 5. Confirm USD.
 6. Normalize donor data.
 7. Create/find donor record.
-8. Create donation record.
-9. For monthly giving, create recurring setup record.
-10. Create Hyperswitch customer if required.
+8. For monthly giving, retrieve or create the donor's stable Hyperswitch customer; reuse it across independent recurring agreements and do not couple it to cancellation.
+9. For monthly giving, create the recurring setup record only after customer resolution succeeds.
+10. Create the donation record.
 11. Create Hyperswitch payment.
 12. Store Hyperswitch payment ID.
 13. Create payment attempt.

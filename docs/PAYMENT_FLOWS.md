@@ -19,11 +19,13 @@ MissionPay donation states are centralized as `pending → processing → succee
 
 1. Monthly is a separate, equally visible frequency. One-time remains the default.
 2. The donor sees the exact amount due today and every month and must check an unselected MissionPay authorization checkbox.
-3. `create-payment` creates a Hyperswitch customer and a pending `recurring_donations` row with a SHA-256 hash of a random management token.
+3. `create-payment` derives one stable Hyperswitch customer ID from the MissionPay donor UUID, retrieves and reuses that customer when it exists, or creates it after the provider's exact not-found response. Exact duplicate-create handling retrieves again to close concurrent creation races before any recurring or donation row is inserted.
 4. The initial payment is a customer-initiated payment with `setup_future_usage: "off_session"` and the shared Hyperswitch customer ID. Unified Checkout visibly displays its save-payment-method checkbox and defaults it on for monthly checkout; Hyperswitch derives `customer_acceptance` from the donor's control rather than MissionPay fabricating it.
 5. After provider success, MissionPay normalizes a direct `payment_method_id` or force-sync retrieves the payment when it is absent. Only a non-empty customer ID plus non-empty reusable method activates the plan and calculates the next monthly date.
 6. If authoritative retrieval still has no reusable method, the first donation remains succeeded while the plan becomes non-chargeable `past_due`. Donor-facing surfaces call this initial setup incomplete and show no future date.
 7. The plain management token is returned once to the donor browser and is not recoverable from the database.
+
+The Hyperswitch customer represents reusable donor/payment identity, while each `recurring_donations` row represents an independent giving agreement. Cancelling one agreement never deletes the customer; the same donor customer can begin another monthly agreement for the same or a different campaign.
 
 ## Monthly MIT
 

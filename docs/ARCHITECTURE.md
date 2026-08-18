@@ -90,6 +90,7 @@ Private trigger functions live in the unexposed `private` schema with an empty `
 - Campaign status and currency are fetched server-side.
 - Raw PAN, CVV, and full payment-instrument data never enter MissionPay.
 - Hyperswitch API keys and webhook secrets exist only as Edge Function secrets.
+- Monthly checkout maps each MissionPay donor UUID to one stable `cus_mp_...` Hyperswitch customer. Customer lookup/create is idempotent under concurrent requests and occurs before recurring or donation rows; recurring-plan cancellation does not delete or recreate customer identity.
 - Hyperswitch request exceptions use a generic log-safe message. Provider response messages are never emitted into browser responses or routine function logs. An explicit `HYPERSWITCH_FAILURE_DIAGNOSTICS=true` opt-in logs only an allowlisted projection of failed retrieve responses and is additionally restricted to the hosted Hyperswitch sandbox hostname; it defaults off.
 - Webhooks use the current Hyperswitch `x-webhook-signature-512` HMAC-SHA512 contract.
 - `payment_events.provider_event_id` makes delivery idempotent.
