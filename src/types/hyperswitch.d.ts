@@ -14,9 +14,19 @@ declare module "@juspay-tech/react-hyper-js" {
     onReady?: (event: unknown) => void;
   }
 
-  interface ConfirmResult { error?: { message?: string } }
+  interface ConfirmPaymentResponse {
+    status: string;
+    next_action?: unknown;
+    payment_experience?: string | null;
+  }
+
+  interface ConfirmPaymentErrorResponse {
+    submitSuccessful: boolean;
+    error: { type: string; message: string };
+  }
+
   interface HyperClient {
-    confirmPayment(options: { elements: unknown; confirmParams: { return_url: string }; redirect: "always" | "if_required" }): Promise<ConfirmResult>;
+    confirmPayment(options: { elements: unknown; confirmParams: { return_url: string }; redirect: "always" | "if_required" }): Promise<ConfirmPaymentResponse | ConfirmPaymentErrorResponse>;
   }
 
   export const HyperElements: ComponentType<HyperElementsProps>;

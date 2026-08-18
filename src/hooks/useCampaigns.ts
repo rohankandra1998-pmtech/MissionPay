@@ -2,9 +2,17 @@ import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import type { Campaign } from "../types/domain";
 
-function normalizeCampaign(row: Record<string, unknown>): Campaign {
+const emptyMetrics: Campaign["metrics"] = {
+  raised_amount_cents: 0,
+  supporter_count: 0,
+  successful_donation_count: 0,
+  active_recurring_count: 0,
+  average_donation_cents: 0,
+};
+
+export function normalizeCampaign(row: Record<string, unknown>): Campaign {
   const fundraiser = Array.isArray(row.fundraiser) ? row.fundraiser[0] : row.fundraiser;
-  const metrics = Array.isArray(row.metrics) ? row.metrics[0] : row.metrics;
+  const metrics = (Array.isArray(row.metrics) ? row.metrics[0] : row.metrics) ?? emptyMetrics;
   return { ...row, fundraiser, metrics } as unknown as Campaign;
 }
 

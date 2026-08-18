@@ -12,6 +12,7 @@ MissionPay is a two-sided fundraising prototype for trustworthy campaign discove
 - Ownership-protected, development-only UI for invoking a real monthly MIT cycle
 - Supabase Auth fundraiser signup/login, campaign draft/edit/publish, dashboard metrics, payment visibility, and recurring-support visibility
 - Versioned Postgres schema, RLS, explicit Data API grants, idempotent webhooks, and billing-period uniqueness
+- Backend-authoritative donation confirmation emails with an internal outbox, bounded retries, and Brevo transactional delivery
 - Meaningful seed data: five campaigns and successful donation rows that derive the primary demo’s $12,450 / 183 supporters
 
 ## Local setup
@@ -47,7 +48,6 @@ Configure server secrets in Supabase:
 
 ```bash
 npx supabase secrets set \
-  SUPABASE_SECRET_KEY=... \
   HYPERSWITCH_API_KEY=... \
   HYPERSWITCH_BASE_URL=https://sandbox.hyperswitch.io \
   HYPERSWITCH_PROFILE_ID=... \
@@ -55,8 +55,14 @@ npx supabase secrets set \
   HYPERSWITCH_WEBHOOK_SECRET=... \
   APP_URL=https://your-app.example \
   CRON_SECRET=... \
+  BREVO_API_KEY=... \
+  MISSIONPAY_EMAIL_FROM_NAME=MissionPay \
+  MISSIONPAY_EMAIL_FROM_ADDRESS=... \
+  MISSIONPAY_EMAIL_REPLY_TO=... \
   ENABLE_DEV_TRIGGER=false
 ```
+
+Hosted Edge Functions receive the same-project `SUPABASE_SECRET_KEYS` and legacy `SUPABASE_SERVICE_ROLE_KEY` automatically. Do not override them with a manually copied project key; `SUPABASE_SECRET_KEY` remains only a local/self-hosted compatibility fallback.
 
 Deploy functions:
 
@@ -66,9 +72,10 @@ npx supabase functions deploy payment-status --no-verify-jwt
 npx supabase functions deploy hyperswitch-webhook --no-verify-jwt
 npx supabase functions deploy cancel-recurring-donation --no-verify-jwt
 npx supabase functions deploy process-recurring-donations --no-verify-jwt
+npx supabase functions deploy process-donation-emails --no-verify-jwt
 ```
 
-These public entry points disable the legacy platform JWT gate intentionally and implement their own controls: guest validation, random status/management capabilities, HMAC webhook authentication, or a dedicated cron secret.
+These entry points disable the legacy platform JWT gate intentionally and implement their own controls: guest validation, random status/management capabilities, HMAC webhook authentication, or a dedicated cron secret. `process-donation-emails` accepts no recipient or message input and is not a general email relay.
 
 ## Hyperswitch setup
 
@@ -83,6 +90,14 @@ Use the profile’s payment response hash key as `HYPERSWITCH_WEBHOOK_SECRET`. E
 ## Scheduler
 
 Supabase’s current recommended hosted architecture combines Cron (`pg_cron`) and `pg_net`. The committed scheduler migration stores no credentials; it reads the project URL and dedicated cron credential from Vault and posts to `/functions/v1/process-recurring-donations` daily at 08:15 UTC. Do not place the Hyperswitch API key in the cron job.
+
+The donation-email migration schedules `/functions/v1/process-donation-emails` every minute with the same protected Vault credential. A database trigger queues only donations that newly enter `succeeded` after the migration is installed; it does not backfill historical successes. The worker derives the recipient from current trusted donor state, reads only donation/campaign business fields, renders HTML and text, and sends through Brevo's Transactional Email API. Configure `BREVO_API_KEY`, `MISSIONPAY_EMAIL_FROM_NAME`, and `MISSIONPAY_EMAIL_FROM_ADDRESS` only as Supabase Edge Function secrets. `MISSIONPAY_EMAIL_REPLY_TO` is optional.
+
+For the zero-cost prototype, create or sign in to Brevo, create an API key for transactional sending, add a MissionPay sender, and complete Brevo's sender verification. If its domain is not authenticated, Brevo sends a six-digit code to the sender address. A controlled free-mailbox address such as Gmail can be used for this prototype if the current Brevo account permits it, but that domain cannot be authenticated. Brevo may rewrite a free or unauthenticated From address to an authenticated Brevo sending domain for deliverability, so this does not provide the sender branding or deliverability quality of a custom authenticated domain. A custom domain is a future production enhancement, not a requirement for this MVP. Never commit or expose the API key through a `VITE_` variable.
+
+After configuring the secrets, deploy only the changed email worker with `npx supabase functions deploy process-donation-emails --no-verify-jwt`, then create a new sandbox donation using the intended donor inbox. Verify the donation is `succeeded`, one outbox row is claimed and marked `sent`, Brevo accepted it, and the donor actually received it. Do not requeue exhausted pre-Brevo rows or backfill historical donations for this test.
+
+Email delivery is independent of payment state: missing configuration, provider outages, or delivery failures leave the donation succeeded and affect only the outbox. Transient failures are retryable within the bounded worker policy. Sandbox confirmations identify themselves as tests and state that no real money moved.
 
 ## Verification
 
