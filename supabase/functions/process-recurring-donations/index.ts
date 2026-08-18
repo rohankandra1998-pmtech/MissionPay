@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { randomToken, sha256 } from "../_shared/crypto.ts";
 import { adminClient, userClient } from "../_shared/database.ts";
-import { createPayment, nextMonthlyDate } from "../_shared/hyperswitch.ts";
+import { createPayment, hyperswitchErrorDiagnostic, nextMonthlyDate } from "../_shared/hyperswitch.ts";
 import { buildPaymentAttemptUpdate, deriveMissionPayStatus } from "../_shared/paymentFailure.ts";
 import { hasRecurringChargeCredentials } from "../_shared/recurring.ts";
 
@@ -58,10 +58,11 @@ Deno.serve(async (request) => {
         else if (missionStatus === "failed") await admin.from("recurring_donations").update({ status: "past_due" }).eq("id", plan.id).eq("status", "active");
         results.push({ recurring_id: plan.id, donation_id: donation.id, payment_id: providerPayment.payment_id, status: missionStatus, period: periodStart });
       } catch (paymentError) {
+        const diagnostic = hyperswitchErrorDiagnostic(paymentError);
         await admin.from("donations").update({ status: "failed" }).eq("id", donation.id);
         await admin.from("recurring_donations").update({ status: "past_due" }).eq("id", plan.id).eq("status", "active");
-        console.error("Recurring payment failed", plan.id, paymentError instanceof Error ? paymentError.message : "unknown error");
-        results.push({ recurring_id: plan.id, donation_id: donation.id, status: "failed", period: periodStart });
+        console.error("Recurring payment failed", { recurring_id: plan.id, donation_id: donation.id, period: periodStart, diagnostic });
+        results.push({ recurring_id: plan.id, donation_id: donation.id, status: "failed", period: periodStart, diagnostic });
       }
     }
     return json(request, { processed: results.length, results });

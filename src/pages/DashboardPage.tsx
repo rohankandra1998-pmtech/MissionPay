@@ -5,6 +5,7 @@ import { DashboardNav } from "../components/DashboardNav";
 import { EmptyState, LoadingState } from "../components/States";
 import { ProgressBar } from "../components/ProgressBar";
 import { formatMoney } from "../lib/format";
+import { formatDevRecurringResult } from "../lib/devRecurringDiagnostic";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/useAuth";
 import type { Campaign, Donation, RecurringDonation } from "../types/domain";
@@ -49,7 +50,7 @@ function RecurringTestHarness({ plans }: { plans: RecurringDonation[] }) {
   const run = async (id: string) => {
     setRunningId(id); setMessage("");
     const { data, error } = await supabase.functions.invoke("process-recurring-donations", { body: { recurring_donation_id: id } });
-    setMessage(error ? error.message : `Worker completed: ${data?.results?.[0]?.status ?? "no due charge"}. Refresh to see the new attempt.`);
+    setMessage(error ? error.message : formatDevRecurringResult(data?.results?.[0]));
     setRunningId(null);
   };
   const active = plans.filter((plan) => plan.status === "active");
