@@ -37,6 +37,29 @@ function stripeLostOrStolenFailure(message: "lost_card" | "stolen_card", issuerC
   };
 }
 
+function stripeGenericDeclineFailure() {
+  return {
+    status: "failed",
+    connector: "stripe",
+    error_code: "card_declined",
+    unified_code: "UE_1000",
+    error_details: {
+      issuer_details: { code: "01", message: "generic_decline" },
+      unified_details: {
+        category: "UE_1000",
+        standardised_code: "payment_method_issue",
+        message: "Issue with Payment Method details",
+        description: "Issue with Payment Method details",
+      },
+      connector_details: {
+        code: "card_declined",
+        message: "Your card was declined.",
+        reason: "message - Your card was declined., decline_code - generic_decline",
+      },
+    },
+  };
+}
+
 describe("payment failure normalization", () => {
   it.each([
     ["INSUFFICIENT_FUNDS", "insufficient_funds"],
@@ -75,6 +98,34 @@ describe("payment failure normalization", () => {
     [stripeLostOrStolenFailure("stolen_card", "43"), "stolen_card"],
   ])("prefers the exact Stripe issuer label over the generic unified fallback", (providerResponse, expected) => {
     expect(normalizePaymentFailure(providerResponse)).toBe(expected);
+  });
+
+  it("lets the exact Stripe generic-decline issuer label override PAYMENT_METHOD_ISSUE", () => {
+    expect(normalizePaymentFailure(stripeGenericDeclineFailure())).toBe("card_declined");
+  });
+
+  it("uses the exact generic-decline issuer label from the authoritative latest attempt", () => {
+    expect(normalizePaymentFailure({
+      status: "failed",
+      error_details: { unified_details: { standardised_code: "PAYMENT_METHOD_ISSUE" } },
+      attempts: [
+        { attempt_id: "older", modified_at: "2026-08-18T10:00:00Z", error_code: "invalid_card" },
+        { attempt_id: "latest", modified_at: "2026-08-18T10:01:00Z", ...stripeGenericDeclineFailure(), status: "failure" },
+      ],
+    })).toBe("card_declined");
+  });
+
+  it("keeps PAYMENT_METHOD_ISSUE as invalid_card without specific issuer evidence", () => {
+    expect(normalizePaymentFailure({
+      error_details: { unified_details: { standardised_code: "PAYMENT_METHOD_ISSUE" } },
+    })).toBe("invalid_card");
+  });
+
+  it("does not treat unrecognized issuer prose as a generic decline", () => {
+    expect(normalizePaymentFailure({
+      status: "failed",
+      error_details: { issuer_details: { message: "The issuer generically declined this card" } },
+    })).toBe("unknown");
   });
 
   it("keeps the ambiguous lost-or-stolen unified code generic", () => {
