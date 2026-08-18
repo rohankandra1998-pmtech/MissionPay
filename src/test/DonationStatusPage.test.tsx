@@ -2,7 +2,6 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DonationStatusPage } from "../pages/DonationStatusPage";
-import { paymentFailureContent } from "../lib/paymentFailure";
 import type { PaymentFailureReason } from "../types/domain";
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
@@ -43,8 +42,8 @@ describe("reason-aware donation status", () => {
   it.each([
     ["insufficient_funds", "There aren't enough funds on this card.", "Try another payment method"],
     ["card_declined", "Your card was declined.", "Try another payment method"],
-    ["lost_card", "This card can't be used for this payment.", "Try another payment method"],
-    ["stolen_card", "This card can't be used for this payment.", "Try another payment method"],
+    ["lost_card", "This card has been reported lost.", "Try another payment method"],
+    ["stolen_card", "This card has been reported stolen.", "Try another payment method"],
     ["card_unavailable", "This card can't be used for this payment.", "Try another payment method"],
     ["authentication_failed", "We couldn't verify this payment with your bank.", "Try again"],
     ["invalid_cvv", "The card security code wasn't accepted.", "Try again"],
@@ -61,17 +60,22 @@ describe("reason-aware donation status", () => {
     expect(screen.getByText(/campaign total/i)).toBeInTheDocument();
   });
 
-  it.each(["lost_card", "stolen_card"] as const)("does not disclose the issuer status for %s", async (reason) => {
+  it.each([
+    ["lost_card", "This card has been reported lost.", /reported stolen/i],
+    ["stolen_card", "This card has been reported stolen.", /reported lost/i],
+  ] as const)("shows only the specific issuer status for %s", async (reason, headline, excludedCopy) => {
     renderStatus(response(reason));
+
+    expect(await screen.findByRole("heading", { name: headline })).toBeInTheDocument();
+    expect(screen.queryByText(excludedCopy)).toBeNull();
+  });
+
+  it("keeps ambiguous unavailable-card failures generic", async () => {
+    renderStatus(response("card_unavailable"));
 
     expect(await screen.findByRole("heading", { name: "This card can't be used for this payment." })).toBeInTheDocument();
     expect(screen.queryByText(/reported lost/i)).toBeNull();
     expect(screen.queryByText(/reported stolen/i)).toBeNull();
-  });
-
-  it("uses one intentionally shared public content object for lost, stolen, and unavailable cards", () => {
-    expect(paymentFailureContent.lost_card).toBe(paymentFailureContent.card_unavailable);
-    expect(paymentFailureContent.stolen_card).toBe(paymentFailureContent.card_unavailable);
   });
 
   it("falls back safely when no normalized reason is available", async () => {

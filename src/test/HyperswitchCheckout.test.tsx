@@ -65,7 +65,7 @@ describe("Hyperswitch checkout confirmation", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Your card was declined.");
     expect(screen.getByRole("button", { name: "Complete secure donation" })).toBeEnabled();
     finishReconciliation?.({ data: { status: "failed", failure: { reason: "lost_card" } }, error: null });
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This card can't be used for this payment."));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This card has been reported lost."));
     expect(screen.getByRole("alert")).not.toHaveTextContent("private issuer explanation");
     expect(screen.getByRole("button", { name: "Complete secure donation" })).toBeEnabled();
   });
@@ -85,6 +85,9 @@ describe("Hyperswitch checkout confirmation", () => {
 
   it.each([
     [{ type: "card_error", message: "private decline", code: "generic_decline" }, "Your card was declined."],
+    [{ type: "card_error", message: "private lost-card detail", error_details: { unified_details: { standardised_code: "card_lost_or_stolen" }, issuer_details: { code: "41", message: "lost_card" } } }, "This card has been reported lost."],
+    [{ type: "card_error", message: "private stolen-card detail", error_details: { unified_details: { standardised_code: "card_lost_or_stolen" }, issuer_details: { code: "43", message: "stolen_card" } } }, "This card has been reported stolen."],
+    [{ type: "card_error", message: "private ambiguous detail", error_code: "card_lost_or_stolen" }, "This card can't be used for this payment."],
     [{ type: "card_error", message: "private unrecognized decline", code: "future_code" }, "Your payment couldn't be completed."],
   ])("uses safe checkout copy for an immediate SDK error", async (error, expectedCopy) => {
     confirmPayment.mockResolvedValue({ submitSuccessful: true, error });
