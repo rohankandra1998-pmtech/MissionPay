@@ -78,8 +78,10 @@ const legacyCodes: Record<string, PaymentFailureReason> = {
 
 // Stripe decline details surfaced through Hyperswitch use these canonical
 // machine-like issuer labels. Check only this structured field, by exact value,
-// before the less specific CARD_LOST_OR_STOLEN unified fallback.
+// before less-specific unified fallbacks such as CARD_LOST_OR_STOLEN and
+// PAYMENT_METHOD_ISSUE.
 const exactIssuerLabels: Record<string, PaymentFailureReason> = {
+  generic_decline: "card_declined",
   lost_card: "lost_card",
   stolen_card: "stolen_card",
 };
