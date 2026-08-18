@@ -20,6 +20,7 @@ interface HookState {
   original: LoadPaymentData;
   wrapper: LoadPaymentData;
   observers: Set<(error: unknown, request: unknown) => void>;
+  stripePublishableKey?: string;
 }
 
 const hooks = new WeakMap<object, HookState>();
@@ -41,6 +42,54 @@ function trimmedString(value: unknown, maximum = 500): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed ? trimmed.slice(0, maximum) : undefined;
+}
+
+function validStripePublishableKey(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length > 500) return undefined;
+  return trimmed.startsWith("pk_test_") || trimmed.startsWith("pk_live_") ? trimmed : undefined;
+}
+
+function hasNonBlankString(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+// Temporary compatibility for Hyperswitch sandbox Stripe-backed Google Pay
+// requests that omit Google's required Stripe tokenization metadata.
+export function prepareStripeGooglePayRequest(request: unknown, publishableKey: unknown): unknown {
+  const safePublishableKey = validStripePublishableKey(publishableKey);
+  const source = record(request);
+  const paymentMethods = read(source, "allowedPaymentMethods");
+  if (!safePublishableKey || !source || !Array.isArray(paymentMethods)) return request;
+
+  let changed = false;
+  const correctedMethods = paymentMethods.map((method) => {
+    if (read(method, "type") !== "CARD") return method;
+    const tokenization = read(method, "tokenizationSpecification");
+    if (read(tokenization, "type") !== "PAYMENT_GATEWAY") return method;
+    const parameters = read(tokenization, "parameters");
+    if (read(parameters, "gateway") !== "stripe") return method;
+
+    const needsVersion = !hasNonBlankString(read(parameters, "stripe:version"));
+    const needsPublishableKey = !hasNonBlankString(read(parameters, "stripe:publishableKey"));
+    if (!needsVersion && !needsPublishableKey) return method;
+
+    changed = true;
+    return {
+      ...record(method),
+      tokenizationSpecification: {
+        ...record(tokenization),
+        parameters: {
+          ...record(parameters),
+          ...(needsVersion ? { "stripe:version": "2018-10-31" } : {}),
+          ...(needsPublishableKey ? { "stripe:publishableKey": safePublishableKey } : {}),
+        },
+      },
+    };
+  });
+
+  return changed ? { ...source, allowedPaymentMethods: correctedMethods } : request;
 }
 
 function stringArray(value: unknown): string[] | undefined {
@@ -141,21 +190,33 @@ function paymentsPrototype(target: Window & typeof globalThis): { prototype: obj
   return prototype && typeof method === "function" ? { prototype, method: method as LoadPaymentData } : undefined;
 }
 
-function subscribeToHook(target: Window & typeof globalThis, observer: HookState["observers"] extends Set<infer T> ? T : never): (() => void) | undefined {
+function subscribeToHook(
+  target: Window & typeof globalThis,
+  observer: HookState["observers"] extends Set<infer T> ? T : never,
+  stripePublishableKey: unknown,
+): (() => void) | undefined {
   const available = paymentsPrototype(target);
   if (!available) return undefined;
   let state = hooks.get(available.prototype);
   if (!state || read(available.prototype, "loadPaymentData") !== state.wrapper) {
     const original = available.method;
     const observers = new Set<(error: unknown, request: unknown) => void>();
+    let createdState: HookState;
     const wrapper: LoadPaymentData = function (this: unknown, ...args: unknown[]) {
-      const result = Reflect.apply(original, this, args);
+      let forwardedArgs = args;
+      try {
+        const correctedRequest = prepareStripeGooglePayRequest(args[0], createdState.stripePublishableKey);
+        if (correctedRequest !== args[0]) forwardedArgs = [correctedRequest, ...args.slice(1)];
+      } catch {
+        // Compatibility preparation fails open to Hyperswitch's original request.
+      }
+      const result = Reflect.apply(original, this, forwardedArgs);
       try {
         const then = read(result, "then");
         if (typeof then === "function") {
           (result as Promise<unknown>).then(undefined, (error: unknown) => {
             for (const notify of [...observers]) {
-              try { notify(error, args[0]); } catch { /* observer-only failure */ }
+              try { notify(error, forwardedArgs[0]); } catch { /* observer-only failure */ }
             }
           });
         }
@@ -164,7 +225,8 @@ function subscribeToHook(target: Window & typeof globalThis, observer: HookState
       }
       return result;
     };
-    state = { original, wrapper, observers };
+    createdState = { original, wrapper, observers, stripePublishableKey: validStripePublishableKey(stripePublishableKey) };
+    state = createdState;
     hooks.set(available.prototype, state);
     try {
       (available.prototype as Record<string, unknown>).loadPaymentData = wrapper;
@@ -176,6 +238,8 @@ function subscribeToHook(target: Window & typeof globalThis, observer: HookState
       hooks.delete(available.prototype);
       return undefined;
     }
+  } else {
+    state.stripePublishableKey = validStripePublishableKey(stripePublishableKey) ?? state.stripePublishableKey;
   }
   state.observers.add(observer);
   return () => {
@@ -200,10 +264,12 @@ export function installGooglePayDiagnostics({
   donationId,
   report,
   target = window,
+  stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY,
 }: {
   donationId: string;
   report: Reporter;
   target?: Window & typeof globalThis;
+  stripePublishableKey?: string;
 }): () => void {
   let active = true;
   let unsubscribe: (() => void) | undefined;
@@ -229,7 +295,7 @@ export function installGooglePayDiagnostics({
       try { safeError = sanitizeGooglePayError(error); } catch { /* sanitized empty */ }
       try { requestSnapshot = sanitizeGooglePayRequest(request); } catch { /* sanitized empty */ }
       safelyReport(report, { event_type: "load_payment_data_rejection", error: safeError, request_snapshot: requestSnapshot });
-    });
+    }, stripePublishableKey);
     if (unsubscribe) {
       stopWaiting();
       reportLifecycle("hook_installed");
