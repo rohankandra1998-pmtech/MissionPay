@@ -3,6 +3,7 @@ import {
   GOOGLE_PAY_HOOK_POLL_MS,
   GOOGLE_PAY_HOOK_TIMEOUT_MS,
   installGooglePayDiagnostics,
+  prepareStripeGooglePayRequest,
   sanitizeGooglePayError,
   sanitizeGooglePayRequest,
 } from "../lib/googlePayDiagnostics";
@@ -32,6 +33,142 @@ function removeGooglePay() {
 afterEach(() => {
   vi.useRealTimers();
   removeGooglePay();
+});
+
+function stripeGooglePayRequest() {
+  return {
+    apiVersion: 2,
+    apiVersionMinor: 0,
+    merchantInfo: { merchantId: "123456789", merchantName: "MissionPay" },
+    transactionInfo: { currencyCode: "USD", totalPrice: "25.00" },
+    allowedPaymentMethods: [{
+      type: "CARD",
+      parameters: { allowedAuthMethods: ["PAN_ONLY", "CRYPTOGRAM_3DS"], allowedCardNetworks: ["VISA"] },
+      tokenizationSpecification: { type: "PAYMENT_GATEWAY", parameters: { gateway: "stripe" } },
+      unrelatedCardField: { keep: true },
+    }],
+    unrelatedRequestField: { keep: true },
+  };
+}
+
+describe("temporary Stripe-backed Google Pay compatibility", () => {
+  it("copy-on-write injects both missing Stripe tokenization fields without mutating the original", () => {
+    const request = stripeGooglePayRequest();
+    const originalSnapshot = structuredClone(request);
+
+    const corrected = prepareStripeGooglePayRequest(request, "  pk_test_supplied_publishable_key  ") as ReturnType<typeof stripeGooglePayRequest>;
+    const parameters = corrected.allowedPaymentMethods[0].tokenizationSpecification.parameters as Record<string, unknown>;
+
+    expect(corrected).not.toBe(request);
+    expect(parameters).toEqual({ gateway: "stripe", "stripe:version": "2018-10-31", "stripe:publishableKey": "pk_test_supplied_publishable_key" });
+    expect(request).toEqual(originalSnapshot);
+    expect(corrected.merchantInfo).toBe(request.merchantInfo);
+    expect(corrected.transactionInfo).toBe(request.transactionInfo);
+    expect(corrected.unrelatedRequestField).toBe(request.unrelatedRequestField);
+    expect(corrected.allowedPaymentMethods[0].unrelatedCardField).toBe(request.allowedPaymentMethods[0].unrelatedCardField);
+  });
+
+  it("preserves an existing Stripe version while injecting only the missing publishable key", () => {
+    const request = stripeGooglePayRequest();
+    request.allowedPaymentMethods[0].tokenizationSpecification.parameters = { gateway: "stripe", "stripe:version": "2099-01-01" } as { gateway: string };
+
+    const corrected = prepareStripeGooglePayRequest(request, "pk_test_supplied") as ReturnType<typeof stripeGooglePayRequest>;
+
+    expect(corrected.allowedPaymentMethods[0].tokenizationSpecification.parameters).toEqual({ gateway: "stripe", "stripe:version": "2099-01-01", "stripe:publishableKey": "pk_test_supplied" });
+  });
+
+  it("preserves an existing publishable key while injecting only the missing Stripe version", () => {
+    const request = stripeGooglePayRequest();
+    request.allowedPaymentMethods[0].tokenizationSpecification.parameters = { gateway: "stripe", "stripe:publishableKey": "pk_live_hyperswitch_value" } as { gateway: string };
+
+    const corrected = prepareStripeGooglePayRequest(request, "pk_test_supplied") as ReturnType<typeof stripeGooglePayRequest>;
+
+    expect(corrected.allowedPaymentMethods[0].tokenizationSpecification.parameters).toEqual({ gateway: "stripe", "stripe:publishableKey": "pk_live_hyperswitch_value", "stripe:version": "2018-10-31" });
+  });
+
+  it("replaces blank tokenization fields but preserves non-blank values", () => {
+    const request = stripeGooglePayRequest();
+    request.allowedPaymentMethods[0].tokenizationSpecification.parameters = { gateway: "stripe", "stripe:version": "  ", "stripe:publishableKey": "" } as { gateway: string };
+
+    const corrected = prepareStripeGooglePayRequest(request, "pk_test_supplied") as ReturnType<typeof stripeGooglePayRequest>;
+
+    expect(corrected.allowedPaymentMethods[0].tokenizationSpecification.parameters).toEqual({ gateway: "stripe", "stripe:version": "2018-10-31", "stripe:publishableKey": "pk_test_supplied" });
+  });
+
+  it("returns the original request when Hyperswitch already provides both non-blank values", () => {
+    const request = stripeGooglePayRequest();
+    request.allowedPaymentMethods[0].tokenizationSpecification.parameters = { gateway: "stripe", "stripe:version": "existing-version", "stripe:publishableKey": "pk_live_existing" } as { gateway: string };
+
+    const corrected = prepareStripeGooglePayRequest(request, "pk_test_supplied");
+
+    expect(corrected).toBe(request);
+    expect(request.allowedPaymentMethods[0].tokenizationSpecification.parameters).toEqual({ gateway: "stripe", "stripe:version": "existing-version", "stripe:publishableKey": "pk_live_existing" });
+  });
+
+  it.each([
+    ["non-Stripe gateway", { type: "CARD", tokenizationSpecification: { type: "PAYMENT_GATEWAY", parameters: { gateway: "adyen" } } }],
+    ["non-CARD method", { type: "TOKENIZED_CARD", tokenizationSpecification: { type: "PAYMENT_GATEWAY", parameters: { gateway: "stripe" } } }],
+    ["non-payment-gateway tokenization", { type: "CARD", tokenizationSpecification: { type: "DIRECT", parameters: { gateway: "stripe" } } }],
+  ])("leaves a %s request completely untouched", (_label, method) => {
+    const request = { allowedPaymentMethods: [method], unrelated: { keep: true } };
+
+    const corrected = prepareStripeGooglePayRequest(request, "pk_test_supplied");
+
+    expect(corrected).toBe(request);
+  });
+
+  it.each([undefined, "", "   ", "sk_test_secret_key", "not_a_publishable_key"])("fails open without a valid publishable key (%s)", (publishableKey) => {
+    const request = stripeGooglePayRequest();
+
+    const corrected = prepareStripeGooglePayRequest(request, publishableKey);
+
+    expect(corrected).toBe(request);
+  });
+
+  it("passes the corrected request to the original method and diagnostics while preserving call and promise identity", async () => {
+    const request = stripeGooglePayRequest();
+    const originalPromise = Promise.reject({ statusCode: "OR_BIBED_06" });
+    let receivedThis: unknown;
+    let receivedArguments: unknown[] = [];
+    const original = vi.fn(function (this: unknown, ...args: unknown[]) {
+      receivedThis = this;
+      receivedArguments = args;
+      return originalPromise;
+    });
+    const prototype = exposeGooglePay(original);
+    const report = vi.fn();
+    const stop = installGooglePayDiagnostics({ donationId: "corrected-diagnostic", report, stripePublishableKey: "pk_test_actual_value_must_not_be_reported" });
+    const client = Object.create(prototype) as { loadPaymentData: LoadPaymentData };
+
+    const returned = client.loadPaymentData(request, "preserved-second-argument");
+
+    expect(returned).toBe(originalPromise);
+    await expect(returned).rejects.toEqual({ statusCode: "OR_BIBED_06" });
+    expect(original).toHaveBeenCalledOnce();
+    expect(receivedThis).toBe(client);
+    expect(receivedArguments[1]).toBe("preserved-second-argument");
+    expect(receivedArguments[0]).not.toBe(request);
+    expect(request.allowedPaymentMethods[0].tokenizationSpecification.parameters).toEqual({ gateway: "stripe" });
+
+    const rejection = report.mock.calls.map(([event]) => event).find((event) => event.event_type === "load_payment_data_rejection");
+    expect(rejection).toMatchObject({
+      request_snapshot: {
+        allowedPaymentMethods: [{
+          tokenizationSpecification: {
+            type: "PAYMENT_GATEWAY",
+            parameters: {
+              gateway: "stripe",
+              "stripe:version": "2018-10-31",
+              stripe_publishable_key_present: true,
+              stripe_publishable_key_mode: "pk_test",
+            },
+          },
+        }],
+      },
+    });
+    expect(JSON.stringify(rejection)).not.toContain("pk_test_actual_value_must_not_be_reported");
+    stop();
+  });
 });
 
 describe("temporary Google Pay browser diagnostics", () => {
@@ -284,7 +421,7 @@ describe("backend-only diagnostic boundary", () => {
   });
 
   it("documents custom capability auth and leaves all payment paths unchanged", () => {
-    expect(configSource).toContain("[functions.google-pay-diagnostic]\nverify_jwt = false");
+    expect(configSource).toMatch(/\[functions\.google-pay-diagnostic\]\r?\nverify_jwt = false/);
     expect(edgeSource).toContain("verify_jwt is intentionally false");
     expect(checkoutSource).toContain('supabase.functions.invoke("google-pay-diagnostic"');
     expect(checkoutSource).toContain('hyper.confirmPayment({');
