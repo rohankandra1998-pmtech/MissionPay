@@ -2,7 +2,8 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { randomToken, sha256 } from "../_shared/crypto.ts";
 import { adminClient, userClient } from "../_shared/database.ts";
-import { createPayment, missionPayStatus, nextMonthlyDate } from "../_shared/hyperswitch.ts";
+import { createPayment, nextMonthlyDate } from "../_shared/hyperswitch.ts";
+import { buildPaymentAttemptUpdate, deriveMissionPayStatus } from "../_shared/paymentFailure.ts";
 
 async function authorized(request: Request, recurringId?: string) {
   const cronSecret = Deno.env.get("CRON_SECRET");
@@ -39,9 +40,14 @@ Deno.serve(async (request) => {
       if (donationError || !donation) { results.push({ recurring_id: plan.id, status: "database_error", period: periodStart }); continue; }
       try {
         const providerPayment = await createPayment({ amount: plan.amount_cents, currency: "USD", confirm: true, capture_method: "automatic", customer_id: plan.hyperswitch_customer_id, profile_id: Deno.env.get("HYPERSWITCH_PROFILE_ID"), off_session: true, recurring_details: { type: "payment_method_id", data: plan.hyperswitch_payment_method_reference }, description: `Monthly donation to ${plan.campaign?.title ?? "MissionPay campaign"}`, metadata: { missionpay_donation_id: donation.id, recurring_donation_id: plan.id, billing_period_start: periodStart } });
-        const missionStatus = missionPayStatus(providerPayment.status ?? "processing");
+        const missionStatus = deriveMissionPayStatus(providerPayment);
         await admin.from("donations").update({ hyperswitch_payment_id: providerPayment.payment_id, status: missionStatus, provider_updated_at: providerPayment.updated ?? new Date().toISOString(), completed_at: missionStatus === "succeeded" ? new Date().toISOString() : null }).eq("id", donation.id);
-        await admin.from("payment_attempts").insert({ donation_id: donation.id, hyperswitch_payment_id: providerPayment.payment_id, attempt_number: 1, status: providerPayment.status ?? missionStatus });
+        await admin.from("payment_attempts").insert({
+          donation_id: donation.id,
+          hyperswitch_payment_id: providerPayment.payment_id,
+          attempt_number: 1,
+          ...buildPaymentAttemptUpdate(providerPayment, missionStatus),
+        });
         if (missionStatus === "succeeded") await admin.from("recurring_donations").update({ status: "active", next_charge_at: nextMonthlyDate(new Date(plan.next_charge_at), plan.billing_anchor_day).toISOString() }).eq("id", plan.id);
         else if (missionStatus === "failed") await admin.from("recurring_donations").update({ status: "past_due" }).eq("id", plan.id);
         results.push({ recurring_id: plan.id, donation_id: donation.id, payment_id: providerPayment.payment_id, status: missionStatus, period: periodStart });

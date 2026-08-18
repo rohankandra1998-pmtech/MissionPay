@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.3";
-import { missionPayStatus, nextMonthlyDate, retrievePayment } from "./hyperswitch.ts";
-import { buildPaymentAttemptUpdate } from "./paymentFailure.ts";
+import { nextMonthlyDate, retrievePayment } from "./hyperswitch.ts";
+import { buildPaymentAttemptUpdate, deriveMissionPayStatus } from "./paymentFailure.ts";
 
 export async function reconcilePayment(admin: SupabaseClient, providerPayment: Record<string, unknown>) {
   const paymentId = String(providerPayment.payment_id ?? "");
@@ -10,7 +10,7 @@ export async function reconcilePayment(admin: SupabaseClient, providerPayment: R
   const donation = Array.isArray(attempt.donation) ? attempt.donation[0] : attempt.donation;
   const providerUpdated = providerPayment.updated ? new Date(String(providerPayment.updated)) : new Date();
   if (donation?.provider_updated_at && new Date(donation.provider_updated_at) > providerUpdated) return donation;
-  const status = missionPayStatus(String(providerPayment.status ?? "processing"));
+  const status = deriveMissionPayStatus(providerPayment);
   await admin.from("payment_attempts").update(buildPaymentAttemptUpdate(providerPayment, status)).eq("id", attempt.id);
   await admin.from("donations").update({ status, provider_updated_at: providerUpdated.toISOString(), completed_at: status === "succeeded" ? providerUpdated.toISOString() : null }).eq("id", attempt.donation_id);
   if (donation?.recurring_donation_id && status === "succeeded") {

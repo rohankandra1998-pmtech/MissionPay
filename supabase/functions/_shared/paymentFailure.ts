@@ -272,6 +272,7 @@ function sanitizeFailureSource(source: Record<string, unknown>, attempt = false)
       "cancellation_reason",
       ...(attempt ? ["created_at", "modified_at", "updated_at"] : []),
     ]),
+    ...(source.manual_retry_allowed === true ? { manual_retry_allowed: true } : {}),
     ...safeTopLevelMessages(source),
   };
   const errorDetails = sanitizeErrorDetails(source);
@@ -285,6 +286,35 @@ export function extractPaymentFailureEvidence(providerPayment: Record<string, un
   return Object.keys(authoritativeAttemptEvidence).length
     ? { ...evidence, authoritative_attempt: authoritativeAttemptEvidence }
     : evidence;
+}
+
+const terminalFailureAttemptStatuses = new Set(["failure", "failed", "authentication_failed", "router_declined"]);
+
+function sourceShowsFailedAttempt(source: Record<string, unknown>, attempt = false) {
+  const status = code(source.status).toLowerCase();
+  if (attempt && terminalFailureAttemptStatuses.has(status)) return true;
+  if (source.manual_retry_allowed === true) return true;
+  if (["error_code", "unified_code", "issuer_error_code", "cancellation_reason"].some((key) => code(source[key]))) return true;
+  if (Object.keys(record(source.error_details)).length > 0) return true;
+  return normalizePaymentFailureEvidence(source) !== "unknown";
+}
+
+export function hasPaymentFailureEvidence(evidence: PaymentFailureEvidence) {
+  const attempt = record(evidence.authoritative_attempt);
+  return (Object.keys(attempt).length > 0 && sourceShowsFailedAttempt(attempt, true))
+    || sourceShowsFailedAttempt(evidence);
+}
+
+export function deriveMissionPayStatus(providerPayment: Record<string, unknown>) {
+  const providerStatus = String(providerPayment.status ?? "processing");
+  if (["succeeded", "captured", "partially_captured"].includes(providerStatus)) return "succeeded";
+  if (["failed", "authentication_failed", "router_declined"].includes(providerStatus)) return "failed";
+  if (["cancelled", "voided"].includes(providerStatus)) return "cancelled";
+  if (providerStatus === "requires_payment_method") {
+    const evidence = extractPaymentFailureEvidence(providerPayment);
+    if (hasPaymentFailureEvidence(evidence)) return "failed";
+  }
+  return "processing";
 }
 
 function stringOrNull(value: unknown) {
