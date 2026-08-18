@@ -19,8 +19,8 @@ vi.mock("../lib/supabase", () => ({ supabase: { functions: { invoke } } }));
 
 import { CheckoutForm } from "../features/payments/HyperswitchCheckout";
 
-function renderCheckout(continueToStatus = vi.fn(), frequency: "one_time" | "monthly" = "one_time") {
-  render(<CheckoutForm donationId="donation-1" statusToken="status-token-which-is-long-and-random" frequency={frequency} continueToStatus={continueToStatus} />);
+function renderCheckout(continueToStatus = vi.fn(), frequency: "one_time" | "monthly" = "one_time", donationId = "donation-1") {
+  render(<CheckoutForm donationId={donationId} statusToken="status-token-which-is-long-and-random" frequency={frequency} continueToStatus={continueToStatus} />);
   return continueToStatus;
 }
 
@@ -45,7 +45,11 @@ describe("Hyperswitch checkout confirmation", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("There aren't enough funds on this card.");
     expect(alert).not.toHaveTextContent("private issuer explanation");
-    expect(confirmPayment).toHaveBeenCalledWith(expect.objectContaining({ redirect: "if_required" }));
+    expect(confirmPayment).toHaveBeenCalledWith({
+      elements: { id: "widgets" },
+      confirmParams: { return_url: `${window.location.origin}/donation/donation-1/success` },
+      redirect: "if_required",
+    });
     expect(invoke).toHaveBeenCalledWith("payment-status", { body: { donation_id: "donation-1", status_token: "status-token-which-is-long-and-random" } });
     expect(continueToStatus).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Complete secure donation" })).toBeEnabled();
@@ -157,6 +161,16 @@ describe("Hyperswitch checkout confirmation", () => {
       savedPaymentMethodsCheckboxCheckedByDefault: true,
     }));
     expect(screen.getByText(/securely saved by Hyperswitch/i)).toBeInTheDocument();
+  });
+
+  it("configures Hyperswitch wallets with the donation status return URL", () => {
+    renderCheckout(vi.fn(), "one_time", "donation-wallet-42");
+
+    expect(paymentElementOptions).toHaveBeenCalledWith(expect.objectContaining({
+      wallets: { walletReturnUrl: `${window.location.origin}/donation/donation-wallet-42/success` },
+    }));
+    const options = paymentElementOptions.mock.calls[0][0] as Record<string, unknown>;
+    expect(options.wallets).not.toHaveProperty("googlePay");
   });
 
   it("does not request saved-payment controls for one-time donations", () => {
