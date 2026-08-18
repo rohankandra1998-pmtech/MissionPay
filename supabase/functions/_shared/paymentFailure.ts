@@ -76,6 +76,14 @@ const legacyCodes: Record<string, PaymentFailureReason> = {
   issuer_not_available: "technical_error",
 };
 
+// Stripe decline details surfaced through Hyperswitch use these canonical
+// machine-like issuer labels. Check only this structured field, by exact value,
+// before the less specific CARD_LOST_OR_STOLEN unified fallback.
+const exactIssuerLabels: Record<string, PaymentFailureReason> = {
+  lost_card: "lost_card",
+  stolen_card: "stolen_card",
+};
+
 // Hyperswitch's Dummy connector can expose these scenario labels in documented
 // message/reason fields without a useful machine code. This intentionally exact
 // allowlist is never used for arbitrary prose or substring matching.
@@ -152,6 +160,11 @@ function errorLayers(source: Record<string, unknown>) {
   return { errorDetails, unifiedDetails, connectorDetails, issuerDetails };
 }
 
+function exactIssuerReasonFromSource(source: Record<string, unknown>): PaymentFailureReason | null {
+  const { issuerDetails } = errorLayers(source);
+  return exactIssuerLabels[normalizedText(issuerDetails.message)] ?? null;
+}
+
 function machineReasonFromSource(source: Record<string, unknown>): PaymentFailureReason | null {
   const { unifiedDetails, connectorDetails, issuerDetails } = errorLayers(source);
   for (const candidate of [
@@ -222,11 +235,11 @@ export function isPaymentFailureReason(value: unknown): value is PaymentFailureR
 
 export function normalizePaymentFailureEvidence(evidence: PaymentFailureEvidence): PaymentFailureReason {
   const attempt = record(evidence.authoritative_attempt);
-  for (const classifier of [machineReasonFromSource, exactTextReasonFromSource, guidanceReasonFromSource, fauxpaySandboxCompatibilityReason]) {
+  for (const classifier of [exactIssuerReasonFromSource, machineReasonFromSource, exactTextReasonFromSource, guidanceReasonFromSource, fauxpaySandboxCompatibilityReason]) {
     const attemptReason = classifier(attempt);
     if (attemptReason) return attemptReason;
   }
-  for (const classifier of [machineReasonFromSource, exactTextReasonFromSource, guidanceReasonFromSource, fauxpaySandboxCompatibilityReason]) {
+  for (const classifier of [exactIssuerReasonFromSource, machineReasonFromSource, exactTextReasonFromSource, guidanceReasonFromSource, fauxpaySandboxCompatibilityReason]) {
     const topLevelReason = classifier(evidence);
     if (topLevelReason) return topLevelReason;
   }

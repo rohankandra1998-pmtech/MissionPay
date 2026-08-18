@@ -7,6 +7,7 @@ const machineCodes: Record<string, PaymentFailureReason> = {
   do_not_honor: "card_declined",
   lost_card: "lost_card",
   stolen_card: "stolen_card",
+  card_lost_or_stolen: "card_unavailable",
   restricted_card: "card_unavailable",
   card_not_supported: "card_unavailable",
   authentication_failed: "authentication_failed",
@@ -53,12 +54,20 @@ export interface PaymentFailureContent {
   action: string;
 }
 
+const cardUnavailableContent: PaymentFailureContent = {
+  eyebrow: "Payment declined",
+  headline: "This card can't be used for this payment.",
+  guidance: "Try another payment method or contact your bank.",
+  body: "Your donation was not charged. Try another payment method or contact your bank if you need help with this card. The donation was not added to the campaign total.",
+  action: "Try another payment method",
+};
+
 export const paymentFailureContent: Record<PaymentFailureReason, PaymentFailureContent> = {
   insufficient_funds: { eyebrow: "Payment declined", headline: "There aren't enough funds on this card.", guidance: "Try another payment method, or add funds and try again.", body: "Your donation was not charged or added to the campaign total. Try another payment method, or add funds and try again.", action: "Try another payment method" },
   card_declined: { eyebrow: "Payment declined", headline: "Your card was declined.", guidance: "Try another payment method or contact your bank if this continues.", body: "Your donation was not charged or added to the campaign total. Try another payment method or contact your bank if this continues.", action: "Try another payment method" },
-  lost_card: { eyebrow: "Payment declined", headline: "This card has been reported lost.", guidance: "Please use another payment method or contact your bank.", body: "Your donation was not charged or added to the campaign total. Please use another payment method or contact your bank.", action: "Try another payment method" },
-  stolen_card: { eyebrow: "Payment declined", headline: "This card has been reported stolen.", guidance: "Please use another payment method or contact your bank.", body: "Your donation was not charged or added to the campaign total. Please use another payment method or contact your bank.", action: "Try another payment method" },
-  card_unavailable: { eyebrow: "Payment declined", headline: "This card can't be used for this payment.", guidance: "Try another payment method or contact your bank.", body: "Your donation was not charged. Try another payment method or contact your bank if you need help with this card. The donation was not added to the campaign total.", action: "Try another payment method" },
+  lost_card: cardUnavailableContent,
+  stolen_card: cardUnavailableContent,
+  card_unavailable: cardUnavailableContent,
   authentication_failed: { eyebrow: "Payment not verified", headline: "We couldn't verify this payment with your bank.", guidance: "Try again and complete the verification step, or use another payment method.", body: "Your donation was not completed or added to the campaign total. Try again and complete your bank's verification step, or use another payment method.", action: "Try again" },
   invalid_cvv: { eyebrow: "Payment not completed", headline: "The card security code wasn't accepted.", guidance: "Check it and try again.", body: "Your donation was not charged or added to the campaign total. Check the security code and try again, or use another payment method.", action: "Try again" },
   expired_card: { eyebrow: "Payment not completed", headline: "This card has expired.", guidance: "Use another payment method.", body: "Your donation was not charged or added to the campaign total. Use another payment method to complete your donation.", action: "Try another payment method" },
@@ -104,6 +113,8 @@ export function classifyCheckoutFailure(value: unknown): PaymentFailureReason {
   const unified = record(errorDetails.unified_details);
   const connector = record(errorDetails.connector_details);
   const issuer = record(errorDetails.issuer_details);
+  const exactIssuerReason = machineCodes[normalized(issuer.message)];
+  if (exactIssuerReason === "lost_card" || exactIssuerReason === "stolen_card") return exactIssuerReason;
   const candidates = [
     unified.standardised_code,
     unified.standardized_code,

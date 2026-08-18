@@ -65,7 +65,7 @@ describe("Hyperswitch checkout confirmation", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Your card was declined.");
     expect(screen.getByRole("button", { name: "Complete secure donation" })).toBeEnabled();
     finishReconciliation?.({ data: { status: "failed", failure: { reason: "lost_card" } }, error: null });
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This card has been reported lost."));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This card can't be used for this payment."));
     expect(screen.getByRole("alert")).not.toHaveTextContent("private issuer explanation");
     expect(screen.getByRole("button", { name: "Complete secure donation" })).toBeEnabled();
   });
@@ -171,6 +171,8 @@ describe("client payment failure classifier", () => {
     [{ error: { decline_code: "do_not_honor" } }, "card_declined"],
     [{ error: { error_code: "lost_card" } }, "lost_card"],
     [{ error: { error_code: "stolen_card" } }, "stolen_card"],
+    [{ error: { error_code: "card_lost_or_stolen" } }, "card_unavailable"],
+    [{ error_details: { unified_details: { standardised_code: "card_lost_or_stolen" }, issuer_details: { code: "41", message: "lost_card" } } }, "lost_card"],
     [{ status: "authentication_failed" }, "authentication_failed"],
     [{ error: { code: "invalid_cvv" } }, "invalid_cvv"],
     [{ error: { code: "expired_card" } }, "expired_card"],
