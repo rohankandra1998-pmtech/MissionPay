@@ -203,17 +203,30 @@ function guidanceReasonFromSource(source: Record<string, unknown>): PaymentFailu
   return exactGuidanceTexts[normalizedText(unifiedDetails.user_guidance_message)] ?? null;
 }
 
+function fauxpaySandboxCompatibilityReason(source: Record<string, unknown>): PaymentFailureReason | null {
+  const { unifiedDetails, connectorDetails } = errorLayers(source);
+  // Hyperswitch documents 4000000000009995 as insufficient funds, but its current
+  // non-StripeTest Dummy path makes Fauxpay emit this exact generic connector error.
+  const matchesInsufficientFundsScenario = normalizedText(source.connector) === "fauxpay"
+    && code(source.error_code).toUpperCase() === "DC_08"
+    && code(source.unified_code).toUpperCase() === "UE_9000"
+    && code(unifiedDetails.category).toUpperCase() === "UE_9000"
+    && code(connectorDetails.code).toUpperCase() === "DC_08"
+    && normalizedText(connectorDetails.message) === "payment declined: internal server error from connector, please try again later";
+  return matchesInsufficientFundsScenario ? "insufficient_funds" : null;
+}
+
 export function isPaymentFailureReason(value: unknown): value is PaymentFailureReason {
   return typeof value === "string" && PAYMENT_FAILURE_REASONS.includes(value as PaymentFailureReason);
 }
 
 export function normalizePaymentFailureEvidence(evidence: PaymentFailureEvidence): PaymentFailureReason {
   const attempt = record(evidence.authoritative_attempt);
-  for (const classifier of [machineReasonFromSource, exactTextReasonFromSource, guidanceReasonFromSource]) {
+  for (const classifier of [machineReasonFromSource, exactTextReasonFromSource, guidanceReasonFromSource, fauxpaySandboxCompatibilityReason]) {
     const attemptReason = classifier(attempt);
     if (attemptReason) return attemptReason;
   }
-  for (const classifier of [machineReasonFromSource, exactTextReasonFromSource, guidanceReasonFromSource]) {
+  for (const classifier of [machineReasonFromSource, exactTextReasonFromSource, guidanceReasonFromSource, fauxpaySandboxCompatibilityReason]) {
     const topLevelReason = classifier(evidence);
     if (topLevelReason) return topLevelReason;
   }

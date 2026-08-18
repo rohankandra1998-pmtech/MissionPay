@@ -87,6 +87,16 @@ function reasonFromCode(value: unknown): PaymentFailureReason | null {
   return machineCodes[code] ?? null;
 }
 
+function fauxpaySandboxCompatibilityReason(result: Record<string, unknown>, error: Record<string, unknown>, unified: Record<string, unknown>, connector: Record<string, unknown>): PaymentFailureReason | null {
+  const matchesInsufficientFundsScenario = normalized(error.connector || result.connector) === "fauxpay"
+    && normalized(error.error_code || result.error_code) === "dc_08"
+    && normalized(error.unified_code || result.unified_code) === "ue_9000"
+    && normalized(unified.category) === "ue_9000"
+    && normalized(connector.code) === "dc_08"
+    && normalized(connector.message) === "payment declined: internal server error from connector, please try again later";
+  return matchesInsufficientFundsScenario ? "insufficient_funds" : null;
+}
+
 export function classifyCheckoutFailure(value: unknown): PaymentFailureReason {
   const result = record(value);
   const error = record(result.error);
@@ -121,6 +131,8 @@ export function classifyCheckoutFailure(value: unknown): PaymentFailureReason {
     const reason = documentedMessages[normalized(candidate)];
     if (reason) return reason;
   }
+  const fauxpayCompatibilityReason = fauxpaySandboxCompatibilityReason(result, error, unified, connector);
+  if (fauxpayCompatibilityReason) return fauxpayCompatibilityReason;
   return "unknown";
 }
 

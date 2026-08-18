@@ -10,6 +10,7 @@ const messages = {
   lost_card: "Payment declined: Lost card",
   stolen_card: "Payment declined: Stolen card",
 } as const;
+const fauxpayInsufficientFundsMessage = "Payment declined: Internal Server Error from Connector, Please try again later";
 
 function providerFailure(message: string, extra: Record<string, unknown> = {}) {
   return {
@@ -108,6 +109,24 @@ describe("payment failure evidence persistence", () => {
       failure_reason: "insufficient_funds",
       provider_failure_snapshot: {
         authoritative_attempt: { error_details: { connector_details: { message: messages.insufficient_funds } } },
+      },
+    });
+  });
+
+  it("persists insufficient funds for the exact Fauxpay sandbox compatibility fingerprint", () => {
+    expect(buildPaymentAttemptUpdate(providerFailure(fauxpayInsufficientFundsMessage), "failed")).toMatchObject({
+      status: "failed",
+      error_code: "DC_08",
+      error_message: null,
+      failure_reason: "insufficient_funds",
+      provider_failure_snapshot: {
+        connector: "fauxpay",
+        error_code: "DC_08",
+        unified_code: "UE_9000",
+        authoritative_attempt: {
+          connector: "fauxpay",
+          error_details: { connector_details: { code: "DC_08", message: fauxpayInsufficientFundsMessage } },
+        },
       },
     });
   });

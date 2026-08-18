@@ -174,4 +174,20 @@ describe("client payment failure classifier", () => {
     expect(classifyCheckoutFailure({ error: { code: "UE_9000", message: "private detail" } })).toBe("unknown");
     expect(classifyCheckoutFailure({ error: { code: "DC_08", message: "private detail" } })).toBe("unknown");
   });
+
+  it("uses the narrow Fauxpay adapter only when an SDK error exposes the complete fingerprint", () => {
+    const error = {
+      connector: "fauxpay",
+      error_code: "DC_08",
+      unified_code: "UE_9000",
+      error_details: {
+        unified_details: { category: "UE_9000", message: "Something went wrong" },
+        connector_details: { code: "DC_08", message: "Payment declined: Internal Server Error from Connector, Please try again later" },
+      },
+    };
+
+    expect(classifyCheckoutFailure({ error })).toBe("insufficient_funds");
+    expect(classifyCheckoutFailure({ error: { ...error, connector: "some_real_processor" } })).toBe("unknown");
+    expect(classifyCheckoutFailure({ error: { connector: "fauxpay", error_code: "DC_08", unified_code: "UE_9000" } })).toBe("unknown");
+  });
 });

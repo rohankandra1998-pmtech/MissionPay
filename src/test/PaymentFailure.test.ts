@@ -3,6 +3,22 @@ import paymentStatusSource from "../../supabase/functions/payment-status/index.t
 import failureMigrationSource from "../../supabase/migrations/20260817222033_improve_hyperswitch_decline_reasons.sql?raw";
 import { normalizePaymentFailure, sanitizePaymentFailureDiagnostic } from "../../supabase/functions/_shared/paymentFailure";
 
+const fauxpayInsufficientFundsMessage = "Payment declined: Internal Server Error from Connector, Please try again later";
+
+function fauxpayInsufficientFundsFingerprint(extra: Record<string, unknown> = {}) {
+  return {
+    status: "failed",
+    connector: "fauxpay",
+    error_code: "DC_08",
+    unified_code: "UE_9000",
+    error_details: {
+      unified_details: { category: "UE_9000", message: "Something went wrong" },
+      connector_details: { code: "DC_08", message: fauxpayInsufficientFundsMessage },
+    },
+    ...extra,
+  };
+}
+
 describe("payment failure normalization", () => {
   it.each([
     ["INSUFFICIENT_FUNDS", "insufficient_funds"],
@@ -96,6 +112,29 @@ describe("payment failure normalization", () => {
     expect(normalizePaymentFailure({ status: "failed", unified_message: "Payment declined: Lost card" })).toBe("lost_card");
   });
 
+  it("maps only the complete observed Fauxpay sandbox fingerprint to insufficient funds", () => {
+    expect(normalizePaymentFailure(fauxpayInsufficientFundsFingerprint())).toBe("insufficient_funds");
+    expect(normalizePaymentFailure({
+      status: "failed",
+      attempts: [{
+        attempt_id: "latest",
+        ...fauxpayInsufficientFundsFingerprint(),
+        status: "failure",
+      }],
+    })).toBe("insufficient_funds");
+  });
+
+  it.each([
+    ["the same codes without the message", { connector: "fauxpay", error_code: "DC_08", unified_code: "UE_9000" }],
+    ["the same fingerprint from another connector", fauxpayInsufficientFundsFingerprint({ connector: "some_real_processor" })],
+    ["different Fauxpay prose", fauxpayInsufficientFundsFingerprint({ error_details: { unified_details: { category: "UE_9000" }, connector_details: { code: "DC_08", message: "Payment declined: Another internal server error" } } })],
+    ["DC_08 alone", { error_code: "DC_08" }],
+    ["UE_9000 alone", { unified_code: "UE_9000" }],
+    ["arbitrary prose mentioning funds", { error_message: "The funds service returned an internal error" }],
+  ])("does not apply the Fauxpay adapter to %s", (_scenario, providerResponse) => {
+    expect(normalizePaymentFailure({ status: "failed", ...providerResponse })).toBe("unknown");
+  });
+
   it("uses the latest timestamped attempt as authoritative", () => {
     expect(normalizePaymentFailure({
       status: "failed",
@@ -116,6 +155,17 @@ describe("payment failure normalization", () => {
         { attempt_id: "latest", modified_at: "2026-08-17T10:02:00Z", error_details: { connector_details: { reason: "lost card" } } },
       ],
     })).toBe("lost_card");
+  });
+
+  it("lets a latest lost-card attempt override the stale Fauxpay compatibility fingerprint", () => {
+    expect(normalizePaymentFailure(fauxpayInsufficientFundsFingerprint({
+      attempts: [{
+        attempt_id: "latest",
+        status: "failure",
+        created_at: "2026-08-17T10:02:00Z",
+        error_details: { connector_details: { message: "Payment declined: Lost card" } },
+      }],
+    }))).toBe("lost_card");
   });
 
   it("uses the observed connector message on the latest attempt instead of stale top-level text", () => {
