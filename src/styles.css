@@ -73,6 +73,7 @@ p { line-height: 1.65; }
 .nav-links > a:not(.button):hover { color: var(--coral-dark); }
 .nav-divider { width: 1px; height: 25px; background: var(--line); }
 .nav-signin { margin-left: 10px; }
+.nav-admin { color: #6f7d78; font-size: .78rem; }
 .nav-toggle { display: none; border: 0; background: transparent; padding: 10px; cursor: pointer; }
 
 .hero { position: relative; min-height: 1060px; overflow: hidden; background: var(--ink); color: white; padding-top: 190px; }
@@ -310,6 +311,21 @@ p { line-height: 1.65; }
 .auth-form label span { color: #84908c; font-weight: 400; }
 .auth-switch { text-align: center; font-size: .85rem; }
 .auth-switch a { color: var(--coral-dark); font-weight: 750; }
+
+.admin-login-page { min-height: 100vh; padding: 72px 24px; background: radial-gradient(circle at 50% 0, rgba(153,193,163,.22), transparent 38%), var(--ink); color: var(--ink); display: grid; place-items: center; }
+.admin-login-card { width: min(100%, 520px); padding: clamp(32px, 6vw, 56px); border: 1px solid rgba(255,255,255,.25); border-radius: 18px; background: var(--paper); box-shadow: 0 30px 90px rgba(0,0,0,.28); }
+.admin-login-card h1 { margin: 8px 0 14px; font-size: clamp(2.7rem, 6vw, 4.8rem); line-height: .94; }
+.admin-login-card > p:not(.eyebrow):not(.form-error) { color: #64736e; }
+.admin-login-mark { margin-bottom: 44px; display: flex; align-items: center; gap: 9px; color: var(--coral-dark); font-size: .75rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.admin-login-card form { margin-top: 34px; }
+.admin-login-card form label { display: flex; flex-direction: column; gap: 7px; margin-bottom: 18px; font-size: .78rem; font-weight: 750; }
+.admin-login-card form input { width: 100%; min-height: 49px; padding: 12px 13px; border: 1px solid var(--line); border-radius: 8px; background: white; outline: 0; }
+.admin-login-card form input:focus { border-color: var(--coral); box-shadow: 0 0 0 3px rgba(216,95,73,.12); }
+.admin-login-card form .button { margin-top: 8px; }
+.admin-back-link { width: max-content; margin: 28px auto 0; display: flex; align-items: center; gap: 7px; color: #66736f; font-size: .82rem; font-weight: 700; }
+.admin-login-card--access > svg { width: 38px; height: 38px; margin-bottom: 26px; color: var(--coral); }
+.admin-login-actions { margin-top: 28px; display: grid; gap: 10px; }
+.admin-login-actions .button { text-align: center; }
 
 .dashboard-layout { min-height: 100vh; display: grid; grid-template-columns: 260px minmax(0,1fr); background: #f0f2ed; }
 .dashboard-nav { position: sticky; top: 0; height: 100vh; padding: 28px 20px; background: var(--ink); color: white; display: flex; flex-direction: column; }

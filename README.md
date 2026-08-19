@@ -136,7 +136,7 @@ For monthly giving, `refund current charge ≠ cancel recurring plan`. Refund co
 
 ### Sandbox platform-admin bootstrap
 
-After applying the migration, create or sign in as the intended sandbox admin and run this once through trusted Supabase SQL/admin tooling. Keep the placeholder until execution time:
+After applying the migration, create the intended sandbox user through trusted Supabase Auth admin tooling. Then add that existing Auth user to `platform_admins` through trusted SQL/admin tooling. Keep the placeholder until execution time:
 
 ```sql
 insert into public.platform_admins (user_id)
@@ -148,6 +148,8 @@ on conflict (user_id) do nothing;
 
 Normal clients have no insert/update/delete grant on `platform_admins`; RLS lets an authenticated user read only their own membership row.
 
+After provisioning both records, sign in at `/admin/login` with that admin account. MissionPay does not expose admin signup; the public fundraiser signup and login flows remain separate.
+
 ### Refund deployment and sandbox verification
 
 This repository change does not apply or deploy anything. After review:
@@ -155,7 +157,7 @@ This repository change does not apply or deploy anything. After review:
 1. Apply `20260819013026_add_admin_approved_refunds.sql` to the intended sandbox project.
 2. Deploy changed functions `payment-status`, `hyperswitch-webhook`, `process-donation-emails`, and new functions `refund-request` and `review-refund-request` using `supabase/config.toml`.
 3. Verify `HYPERSWITCH_API_KEY`, `HYPERSWITCH_BASE_URL`, `HYPERSWITCH_WEBHOOK_SECRET`, `APP_URL`, and the existing 32+ byte `DONATION_MANAGEMENT_LINK_SECRET` are configured only as Edge Function secrets.
-4. Add sandbox admin membership with the placeholder SQL above.
+4. Provision the sandbox Auth user and admin membership with the trusted-tooling steps and placeholder SQL above, then sign in at `/admin/login`.
 5. Verify `refund_succeeded` and `refund_failed` reach the existing signed Hyperswitch webhook endpoint.
 6. Complete a successful one-time sandbox payment, request from the app, approve in `/admin/refunds`, and confirm provider success changes the donation to `refunded` and updates succeeded-only totals/activity.
 7. Complete another successful donation and submit from the email link on another device/browser.
