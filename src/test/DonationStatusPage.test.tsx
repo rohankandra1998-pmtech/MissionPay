@@ -96,6 +96,18 @@ describe("reason-aware donation status", () => {
     expect(screen.getByText("$50")).toBeInTheDocument();
   });
 
+  it("offers the server-generated refund workflow after success", async () => {
+    renderStatus({ ...response(undefined, "succeeded"), completed_at: "2026-08-17T00:01:00Z", refund_url: "https://missionpay.example/refund-request/mp1.refund.signature" });
+    expect(await screen.findByRole("link", { name: "Request a refund" })).toHaveAttribute("href", "https://missionpay.example/refund-request/mp1.refund.signature");
+  });
+
+  it("renders refunded as its own terminal state instead of payment failure", async () => {
+    renderStatus({ ...response(undefined, "refunded"), completed_at: "2026-08-17T00:01:00Z", refund_url: "https://missionpay.example/refund-request/mp1.refund.signature" });
+    expect(await screen.findByRole("heading", { name: "Donation refunded" })).toBeInTheDocument();
+    expect(screen.getByText(/original payment method/i)).toBeInTheDocument();
+    expect(screen.queryByText(/payment couldn't be completed/i)).not.toBeInTheDocument();
+  });
+
   it("shows active monthly status only when reusable payment setup is ready", async () => {
     sessionStorage.setItem("missionpay:management:donation-1", "secure-management-token");
     renderStatus({

@@ -2,7 +2,7 @@
 
 ## Business and provider states
 
-MissionPay donation states are centralized as `pending → processing → succeeded | failed`, with `cancelled` and `refunded` available for later lifecycle events. Provider statuses are mapped in one shared backend module. The browser can display an interim state but cannot set a donation to `succeeded`.
+MissionPay donation states are centralized as `pending → processing → succeeded | failed`, with `cancelled` and `refunded` used for later lifecycle events. Provider statuses are mapped in shared backend modules. The browser can display interim payment/refund state but cannot set a donation to `succeeded` or `refunded`.
 
 ## One-time donation
 
@@ -70,6 +70,76 @@ The protected development trigger calls this exact worker path; it never substit
 One-time successes receive one confirmation and no management control. An initial or future monthly success is a distinct donation row and therefore receives its own confirmation and management link. Active-and-ready monthly receipts show the next date; missing initial tokenization says setup incomplete with no future charge; cancelled receipts explicitly state there are no future charges and still confirm the successful payment. Anonymous donors are emailed privately while the message notes their public identity remains Anonymous. Payment success, metrics, and supporter activity never depend on email delivery.
 
 The database unique donation/type key, atomic `FOR UPDATE SKIP LOCKED` claim, and terminal `sent` state are the durable idempotency guarantees. Brevo's provider-level guard reuses the stable delivery UUID on retries, but its documented TTL is only 30 minutes, so MissionPay does not treat it as a durable replacement.
+
+Every successful donation email also receives a server-generated `request_refund` capability URL. A one-time email shows **View campaign** and **Request a refund**. A monthly email separately explains that **Manage monthly donation** controls future automatic charges, while **Request a refund** applies only to that completed charge.
+
+## Donor-requested, admin-approved refunds
+
+### Roles and lifecycle
+
+```text
+Donor request
+→ platform admin review
+→ Hyperswitch refund
+→ verified webhook/retrieval reconciliation
+→ donation refunded
+```
+
+- Donor: can preview the donation and create one request through a signed capability; no account is required.
+- Platform admin: can list, approve, decline, execute, and synchronize only after backend membership verification.
+- Fundraiser: sees the resulting donation state but receives no approval or execution controls.
+
+`refund_requests` stores the donor request and auditable admin decision. `refunds` stores the distinct financial operation. One request and one financial refund are allowed per donation in this full-refund MVP.
+
+### Donor capability and request
+
+The refund URL uses backend-only `DONATION_MANAGEMENT_LINK_SECRET` with the explicit `request_refund` purpose. Its payload contains only the donation UUID. The recurring-management verifier requires `manage_recurring_donation`, so the capabilities are not interchangeable. Tokens are bounded, decoded strictly, HMAC-verified, and never persisted or logged.
+
+`refund-request` has `verify_jwt = false` because donors are guests, but every operation requires the capability before service-role lookup. The server checks that the donation is `succeeded`, has a Hyperswitch payment ID, and is not already refunded. Repeated submission returns the existing request. Reasons are allowlisted and details are capped at 500 characters. Submission never calls Hyperswitch.
+
+### Admin review and provider execution
+
+`review-refund-request` authenticates the caller with Supabase Auth and separately looks up that user in `platform_admins`. Client flags and fundraiser membership are irrelevant. Decline uses a conditional `pending → declined` update and never calls Hyperswitch.
+
+Approval conditionally records `pending → approved`, then persists a local refund identity before provider execution. The provider ID is stable: `ref_` plus the compact refund-request UUID. The database request UUID is v4-generated, and the stable prefixed value is reused across every retry. Unique constraints on donation, request, and provider refund ID plus a conditional execution claim prevent concurrent approvals from creating two refunds.
+
+The provider payload is built only from authoritative database values:
+
+```json
+{
+  "payment_id": "<donation hyperswitch_payment_id>",
+  "refund_id": "<stable MissionPay refund id>",
+  "amount": "<donation amount_cents>",
+  "refund_type": "instant",
+  "reason": "duplicate | fraudulent | requested_by_customer",
+  "metadata": {
+    "missionpay_donation_id": "...",
+    "missionpay_refund_request_id": "..."
+  }
+}
+```
+
+Internal `duplicate` maps to provider `duplicate`, `unauthorized` to `fraudulent`, and `incorrect_amount`/`other` to `requested_by_customer`. Donor free text stays in MissionPay.
+
+### Reconciliation and accounting
+
+Hyperswitch V1 refund states are `succeeded`, `failed`, `pending`, and `review`; MissionPay adds local `initiating`. Admin approval alone leaves the donation succeeded. `reconcileRefund` validates refund/payment/amount/currency identities, ignores stale updates, prevents a succeeded refund from regressing, stores only a sanitized provider error code, and changes the donation to `refunded` only for provider `succeeded`.
+
+The existing signed webhook branches refund events (`refund_succeeded`, `refund_failed`, and `content.type = refund_details`) to `reconcileRefund`, never payment reconciliation. `payment_events.provider_event_id` still deduplicates retries, and nullable `refund_id` associates refund events without a parallel event system. Donor preview and explicit admin sync use `GET /refunds/{refund_id}` server-side as recovery from delayed/missed webhooks.
+
+Existing metrics, supporter activity, and fundraiser totals count only `donations.status = 'succeeded'`. Therefore the authoritative `succeeded → refunded` transition removes the donation naturally; requested, approved, initiating, pending, review, and failed refunds do not change totals.
+
+### Monthly invariant
+
+```text
+refund one monthly charge ≠ cancel monthly donation
+```
+
+Refund reconciliation updates only the individual donation and refund. It never updates `recurring_donations.status`, `next_charge_at`, `billing_anchor_day`, `hyperswitch_customer_id`, or `hyperswitch_payment_method_reference`. Future installments continue unless the donor separately uses recurring cancellation.
+
+### Verified provider contracts
+
+Implementation uses the current official [Hyperswitch V1 refund-create contract](https://api-reference.hyperswitch.io/v1/refunds/refunds--create), [V1 refund-retrieve contract](https://api-reference.hyperswitch.io/v1/refunds/refunds--retrieve), [webhook guide](https://docs.hyperswitch.io/explore-hyperswitch/payment-orchestration/quickstart/webhooks), and Hyperswitch's official event schema defining refund event class/type and `content: { type: "refund_details", object: RefundResponse }`.
 
 ## Failure and retry
 

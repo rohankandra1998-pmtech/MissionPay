@@ -12,6 +12,7 @@ export type DonationConfirmationData = {
   recurringPaymentMethodReady?: boolean;
   nextChargeAt?: string | null;
   managementUrl?: string | null;
+  refundUrl: string;
   sandbox: boolean;
 };
 
@@ -100,13 +101,15 @@ export function buildDonationConfirmationEmail(data: DonationConfirmationData): 
     : "";
   const managementUrl = data.frequency === "monthly" && data.managementUrl ? escapeHtml(data.managementUrl) : null;
   const managementAction = managementUrl
-    ? `<p style="margin:28px 0 0"><a href="${managementUrl}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#d85f49;color:#fff;text-decoration:none">Manage monthly donation</a></p>`
+    ? `<p style="margin:28px 0 0"><a href="${managementUrl}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#d85f49;color:#fff;text-decoration:none">Manage monthly donation</a></p><p style="margin:8px 0;color:#4d5358;font-size:14px">Controls future automatic donations.</p>`
     : "";
+  const refundUrl = escapeHtml(data.refundUrl);
+  const refundAction = `<p style="margin:16px 0 0"><a href="${refundUrl}" style="display:inline-block;padding:12px 18px;border-radius:8px;border:1px solid #17211d;color:#17211d;text-decoration:none">Request a refund</a></p>${data.frequency === "monthly" ? `<p style="margin:8px 0;color:#4d5358;font-size:14px">Requests a refund for this completed charge only. It does not cancel future monthly donations.</p>` : ""}`;
   const subjectPrefix = data.sandbox ? "[MissionPay Sandbox] " : "";
   const subject = safeSubject(`${subjectPrefix}Donation confirmed — ${data.campaignTitle}`);
   const frequency = data.frequency === "monthly" ? "Monthly" : "One-time";
 
-  const html = `<!doctype html><html><body style="margin:0;background:#f6f3ee;color:#17211d;font-family:Arial,sans-serif"><div style="max-width:600px;margin:0 auto;padding:40px 20px"><div style="background:#fff;border-radius:16px;padding:32px"><p style="margin:0 0 24px;font-weight:700;color:#145c46">MissionPay</p><h1 style="margin:0 0 16px;font-size:28px">Donation confirmed</h1><p>Hello ${greeting},</p><p>Thank you for supporting <strong>${title}</strong>.</p>${sandboxNotice}<table style="width:100%;margin:24px 0;border-collapse:collapse"><tr><td style="padding:7px 0;color:#687076">${data.frequency === "monthly" ? "Amount today" : "Amount"}</td><td style="padding:7px 0;text-align:right;font-weight:600">${escapeHtml(amount)} ${escapeHtml(data.currency)}</td></tr><tr><td style="padding:7px 0;color:#687076">Frequency</td><td style="padding:7px 0;text-align:right;font-weight:600">${frequency}</td></tr>${monthlyStatus}${nextDonation}<tr><td style="padding:7px 0;color:#687076">Status</td><td style="padding:7px 0;text-align:right;font-weight:600">Confirmed</td></tr><tr><td style="padding:7px 0;color:#687076">MissionPay reference</td><td style="padding:7px 0;text-align:right;font-family:monospace">${reference}</td></tr><tr><td style="padding:7px 0;color:#687076">Confirmed</td><td style="padding:7px 0;text-align:right">${escapeHtml(formatTimestamp(data.completedAt))}</td></tr></table>${anonymousNotice}<p style="color:#4d5358">Your payment was confirmed securely through MissionPay's payment flow.</p>${managementAction}<p style="margin:16px 0 0"><a href="${campaignUrl}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#17211d;color:#fff;text-decoration:none">View campaign</a></p></div></div></body></html>`;
+  const html = `<!doctype html><html><body style="margin:0;background:#f6f3ee;color:#17211d;font-family:Arial,sans-serif"><div style="max-width:600px;margin:0 auto;padding:40px 20px"><div style="background:#fff;border-radius:16px;padding:32px"><p style="margin:0 0 24px;font-weight:700;color:#145c46">MissionPay</p><h1 style="margin:0 0 16px;font-size:28px">Donation confirmed</h1><p>Hello ${greeting},</p><p>Thank you for supporting <strong>${title}</strong>.</p>${sandboxNotice}<table style="width:100%;margin:24px 0;border-collapse:collapse"><tr><td style="padding:7px 0;color:#687076">${data.frequency === "monthly" ? "Amount today" : "Amount"}</td><td style="padding:7px 0;text-align:right;font-weight:600">${escapeHtml(amount)} ${escapeHtml(data.currency)}</td></tr><tr><td style="padding:7px 0;color:#687076">Frequency</td><td style="padding:7px 0;text-align:right;font-weight:600">${frequency}</td></tr>${monthlyStatus}${nextDonation}<tr><td style="padding:7px 0;color:#687076">Status</td><td style="padding:7px 0;text-align:right;font-weight:600">Confirmed</td></tr><tr><td style="padding:7px 0;color:#687076">MissionPay reference</td><td style="padding:7px 0;text-align:right;font-family:monospace">${reference}</td></tr><tr><td style="padding:7px 0;color:#687076">Confirmed</td><td style="padding:7px 0;text-align:right">${escapeHtml(formatTimestamp(data.completedAt))}</td></tr></table>${anonymousNotice}<p style="color:#4d5358">Your payment was confirmed securely through MissionPay's payment flow.</p>${managementAction}<p style="margin:16px 0 0"><a href="${campaignUrl}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#17211d;color:#fff;text-decoration:none">View campaign</a></p>${refundAction}</div></div></body></html>`;
 
   const lines = [
     "MissionPay", "", data.frequency === "monthly" ? "Your monthly donation was confirmed." : "Donation confirmed", "",
@@ -120,7 +123,10 @@ export function buildDonationConfirmationEmail(data: DonationConfirmationData): 
     data.isAnonymous ? "Your donation is shown publicly as Anonymous." : "", "",
     "Your payment was confirmed securely through MissionPay's payment flow.",
     data.frequency === "monthly" && data.managementUrl ? `Manage monthly donation: ${data.managementUrl}` : "",
+    data.frequency === "monthly" ? "Manage monthly donation controls future automatic donations." : "",
     `View campaign: ${data.campaignUrl}`,
+    `Request a refund: ${data.refundUrl}`,
+    data.frequency === "monthly" ? "A refund request applies only to this completed charge. It does not cancel future monthly donations." : "",
   ].filter((line) => line !== "");
 
   return { subject, html, text: lines.join("\n") };

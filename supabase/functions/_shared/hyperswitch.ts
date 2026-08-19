@@ -100,6 +100,38 @@ export function createPayment(input: Record<string, unknown>) {
   return request("/payments", { method: "POST", body: JSON.stringify(input) });
 }
 
+export type HyperswitchRefundStatus = "succeeded" | "failed" | "pending" | "review";
+
+export type HyperswitchRefund = {
+  refund_id: string;
+  payment_id: string;
+  amount: number;
+  currency: string;
+  status: HyperswitchRefundStatus;
+  reason?: string | null;
+  metadata?: Record<string, unknown> | null;
+  error_code?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type CreateRefundInput = {
+  payment_id: string;
+  refund_id: string;
+  amount: number;
+  refund_type: "instant";
+  reason: "duplicate" | "fraudulent" | "requested_by_customer";
+  metadata: Record<string, string>;
+};
+
+export async function createRefund(input: CreateRefundInput) {
+  return await request("/refunds", { method: "POST", body: JSON.stringify(input) }) as HyperswitchRefund;
+}
+
+export async function retrieveRefund(refundId: string) {
+  return await request(`/refunds/${encodeURIComponent(refundId)}`, { method: "GET" }) as HyperswitchRefund;
+}
+
 export async function retrievePayment(paymentId: string, forceSync = false) {
   const query = new URLSearchParams({ expand_attempts: "true" });
   if (forceSync) query.set("force_sync", "true");
