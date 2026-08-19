@@ -218,8 +218,8 @@ p { line-height: 1.65; }
 .amount-grid { display: grid; grid-template-columns: repeat(5,1fr); gap: 7px; margin: 24px 0; }
 .amount-grid button, .amount-grid label { height: 50px; border: 1px solid var(--line); border-radius: 8px; background: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-weight: 700; }
 .amount-grid .active { border: 2px solid var(--coral); background: #fff3ef; }
-.amount-grid label { padding: 0 8px; }
-.amount-grid input { width: 58px; border: 0; outline: 0; background: transparent; }
+.donation-form .amount-grid .custom-amount { flex-direction: row; gap: 5px; margin: 0; padding: 0 12px; font-size: inherit; }
+.donation-form .amount-grid .custom-amount input { width: 100%; min-width: 0; min-height: 0; border: 0; border-radius: 0; padding: 0; outline: 0; background: transparent; box-shadow: none; font: inherit; }
 .monthly-explainer { padding: 14px; background: var(--sage); border-radius: 8px; font-size: .84rem; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
 .donation-form label:not(.check-field), .auth-form label, .campaign-form label { display: flex; flex-direction: column; gap: 7px; margin-bottom: 16px; font-size: .78rem; font-weight: 750; }
