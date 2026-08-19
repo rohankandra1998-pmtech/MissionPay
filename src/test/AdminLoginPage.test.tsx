@@ -32,7 +32,7 @@ function renderPage() {
 function submitCredentials() {
   fireEvent.change(screen.getByLabelText("Email address"), { target: { value: "admin@example.com" } });
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "missionpay1" } });
-  fireEvent.click(screen.getByRole("button", { name: "Sign in to admin" }));
+  fireEvent.click(screen.getByRole("button", { name: "Sign in to Platform Support" }));
 }
 
 describe("admin authentication", () => {
@@ -50,12 +50,13 @@ describe("admin authentication", () => {
     mocks.from.mockReset().mockReturnValue({ select: mocks.select });
   });
 
-  it("renders dedicated admin fields and copy without fundraiser signup", () => {
+  it("renders dedicated Platform Support Admin fields and copy without fundraiser signup", () => {
     renderPage();
-    expect(screen.getByRole("heading", { name: "Admin sign in" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Platform Support Admin sign in" })).toBeInTheDocument();
+    expect(screen.getByText("Sign in with a provisioned MissionPay platform-support admin account.")).toBeInTheDocument();
     expect(screen.getByLabelText("Email address")).toBeInTheDocument();
     expect(screen.getByLabelText("Password")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Sign in to admin" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in to Platform Support" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to MissionPay" })).toHaveAttribute("href", "/");
     expect(screen.queryByText(/create an account|start a fundraiser|organization/i)).not.toBeInTheDocument();
   });
@@ -75,7 +76,7 @@ describe("admin authentication", () => {
     mocks.maybeSingle.mockResolvedValue({ data: null, error: null });
     renderPage();
     submitCredentials();
-    expect(await screen.findByRole("alert")).toHaveTextContent("This account does not have MissionPay admin access.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("This account does not have MissionPay Platform Support Admin access.");
     expect(mocks.authSignOut).toHaveBeenCalledWith({ scope: "local" });
     expect(screen.queryByText("Refund review workspace")).not.toBeInTheDocument();
   });
@@ -103,7 +104,7 @@ describe("admin authentication", () => {
     expect(await screen.findByText("fundraiser@example.com")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Return to fundraiser dashboard" })).toHaveAttribute("href", "/dashboard");
     expect(mocks.authSignOut).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Sign out and use an admin account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign out and use a Platform Support Admin account" }));
     await waitFor(() => expect(mocks.authState.signOut).toHaveBeenCalledOnce());
   });
 
@@ -112,7 +113,7 @@ describe("admin authentication", () => {
     mocks.maybeSingle.mockResolvedValue({ data: null, error: new Error("database unavailable") });
     renderPage();
     submitCredentials();
-    expect(await screen.findByRole("alert")).toHaveTextContent("unable to verify admin access");
+    expect(await screen.findByRole("alert")).toHaveTextContent("unable to verify Platform Support Admin access");
     expect(mocks.authSignOut).toHaveBeenCalledWith({ scope: "local" });
     expect(screen.queryByText("Refund review workspace")).not.toBeInTheDocument();
   });

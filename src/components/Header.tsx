@@ -21,7 +21,7 @@ export function Header() {
           <span className="nav-divider" />
           <Link to="/dashboard/campaigns/new">For fundraisers</Link>
           <Link to="/login" className="nav-signin">Sign in</Link>
-          <Link to="/admin/login" className="nav-admin">Admin</Link>
+          <Link to="/admin/login" className="button button--small button--outline nav-support">Platform Support</Link>
           <Link to="/signup" className="button button--small button--dark">Start a fundraiser</Link>
         </nav>
       </div>

@@ -57,8 +57,8 @@ export function AdminLoginPage() {
     await supabase.auth.signOut({ scope: "local" });
     credentialFlow.current = false;
     setMessage(result === "denied"
-      ? "This account does not have MissionPay admin access."
-      : "We’re unable to verify admin access right now. Please try again.");
+      ? "This account does not have MissionPay Platform Support Admin access."
+      : "We’re unable to verify Platform Support Admin access right now. Please try again.");
     setBusy(false);
   };
 
@@ -71,12 +71,12 @@ export function AdminLoginPage() {
   };
 
   if (loading || (user && (access === "idle" || access === "checking"))) {
-    return <main className="admin-login-page"><LoadingState label="Verifying MissionPay admin access" /></main>;
+    return <main className="admin-login-page"><LoadingState label="Verifying Platform Support Admin access" /></main>;
   }
 
   if (user && (access === "denied" || access === "error")) {
-    return <main className="admin-login-page"><section className="admin-login-card admin-login-card--access"><ShieldCheck /><p className="eyebrow">MissionPay Admin</p><h1>Admin access required</h1><p>Signed in as <strong>{user.email}</strong></p><p className="form-error" role="alert">{access === "denied" ? "This account does not have MissionPay admin access." : "We’re unable to verify admin access right now. Please try again."}</p><div className="admin-login-actions"><Link className="button button--outline" to="/dashboard">Return to fundraiser dashboard</Link><button className="button button--dark" onClick={() => void switchAccount()} disabled={busy}>Sign out and use an admin account</button></div></section></main>;
+    return <main className="admin-login-page"><section className="admin-login-card admin-login-card--access"><ShieldCheck /><p className="eyebrow">MissionPay Platform Support</p><h1>Platform Support Admin access required</h1><p>Signed in as <strong>{user.email}</strong></p><p className="form-error" role="alert">{access === "denied" ? "This account does not have MissionPay Platform Support Admin access." : "We’re unable to verify Platform Support Admin access right now. Please try again."}</p><div className="admin-login-actions"><Link className="button button--outline" to="/dashboard">Return to fundraiser dashboard</Link><button className="button button--dark" onClick={() => void switchAccount()} disabled={busy}>Sign out and use a Platform Support Admin account</button></div></section></main>;
   }
 
-  return <main className="admin-login-page"><section className="admin-login-card"><div className="admin-login-mark"><ShieldCheck /><span>Internal access</span></div><p className="eyebrow">MissionPay Admin</p><h1>Admin sign in</h1><p>Sign in with a provisioned platform-admin account.</p><form onSubmit={submit}><label>Email address<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>Password<input type="password" autoComplete="current-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>{message && <p className="form-error" role="alert">{message}</p>}<button className="button button--dark button--full" disabled={busy}>{busy ? "Verifying access…" : "Sign in to admin"}<ArrowRight size={17} /></button></form><Link className="admin-back-link" to="/"><ArrowLeft size={16} /> Back to MissionPay</Link></section></main>;
+  return <main className="admin-login-page"><section className="admin-login-card"><div className="admin-login-mark"><ShieldCheck /><span>Internal access</span></div><p className="eyebrow">MissionPay Platform Support</p><h1>Platform Support Admin sign in</h1><p>Sign in with a provisioned MissionPay platform-support admin account.</p><p>Access refund review and MissionPay platform support operations.</p><form onSubmit={submit}><label>Email address<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>Password<input type="password" autoComplete="current-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>{message && <p className="form-error" role="alert">{message}</p>}<button className="button button--dark button--full" disabled={busy}>{busy ? "Verifying access…" : "Sign in to Platform Support"}<ArrowRight size={17} /></button></form><Link className="admin-back-link" to="/"><ArrowLeft size={16} /> Back to MissionPay</Link></section></main>;
 }
