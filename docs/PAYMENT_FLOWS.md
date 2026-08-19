@@ -69,9 +69,23 @@ The protected development trigger calls this exact worker path; it never substit
 
 One-time successes receive one confirmation and no management control. An initial or future monthly success is a distinct donation row and therefore receives its own confirmation and management link. Active-and-ready monthly receipts show the next date; missing initial tokenization says setup incomplete with no future charge; cancelled receipts explicitly state there are no future charges and still confirm the successful payment. Anonymous donors are emailed privately while the message notes their public identity remains Anonymous. Payment success, metrics, and supporter activity never depend on email delivery.
 
-The database unique donation/type key, atomic `FOR UPDATE SKIP LOCKED` claim, and terminal `sent` state are the durable idempotency guarantees. Brevo's provider-level guard reuses the stable delivery UUID on retries, but its documented TTL is only 30 minutes, so MissionPay does not treat it as a durable replacement.
+The database unique donation/type and recurring-plan/type keys, atomic `FOR UPDATE SKIP LOCKED` claim, and terminal `sent` state are the durable idempotency guarantees. Brevo's provider-level guard reuses the stable delivery UUID on retries, but its documented TTL is only 30 minutes, so MissionPay does not treat it as a durable replacement.
 
 Every successful donation email also receives a server-generated `request_refund` capability URL. A one-time email shows **View campaign** and **Request a refund**. A monthly email separately explains that **Manage monthly donation** controls future automatic charges, while **Request a refund** applies only to that completed charge.
+
+## Refund and cancellation lifecycle emails
+
+The same outbox and cron worker handle five additional database-state-driven notification types:
+
+```text
+refund_requests INSERT → refund_requested
+refund_requests pending → approved → refund_approved
+refund_requests pending → declined → refund_declined
+refunds non-succeeded → succeeded → refund_completed
+recurring_donations non-cancelled → cancelled → recurring_cancelled
+```
+
+Each transition inserts with `ON CONFLICT DO NOTHING` behind a scope-specific unique index. Request/decision/completion messages use the donation scope; recurring cancellation uses the recurring plan directly rather than an arbitrary installment. Approval copy says the refund is being processed, while only `refunds.status = succeeded` produces completion copy. Monthly refund messages state that the plan remains unaffected. Cancellation says future automatic charges stop and previous completed donations are not refunded.
 
 ## Donor-requested, admin-approved refunds
 
@@ -168,7 +182,7 @@ The diagnostic contains only payment/attempt IDs, statuses, connector names, tim
 
 ## Cancellation
 
-`cancel-recurring-donation` accepts either an existing opaque URL token (looked up by its stored SHA-256 hash) or a signed email capability (HMAC verified before lookup). Invalid, altered, unsupported, and nonexistent capabilities receive the same generic response and expose no plan data. The management page requires a second explicit affirmative action; the safe choice receives initial focus and performs no mutation. Cancellation is idempotent, sets `status = cancelled` and `cancelled_at`, and preserves every prior donation and event. The scheduler selects only `active` plans, and its result updates are also conditioned on the plan remaining active.
+`cancel-recurring-donation` accepts either an existing opaque URL token (looked up by its stored SHA-256 hash) or a signed email capability (HMAC verified before lookup). Invalid, altered, unsupported, and nonexistent capabilities receive the same generic response and expose no plan data. The management page requires a second explicit affirmative action; the safe choice receives initial focus and performs no mutation. Cancellation is idempotent, sets `status = cancelled` and `cancelled_at`, preserves every prior donation and event, and queues one recurring-plan-scoped cancellation email. The scheduler selects only `active` plans, and its result updates are also conditioned on the plan remaining active.
 
 ## Refunds and disputes
 
