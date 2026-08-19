@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildDonationConfirmationEmail,
+  buildRecurringCancellationEmail,
+  buildRefundApprovedEmail,
+  buildRefundCompletedEmail,
+  buildRefundDeclinedEmail,
+  buildRefundRequestedEmail,
   EmailConfigurationError,
   EmailProviderError,
   failedDeliveryUpdate,
   safeDeliveryError,
   sendDonationConfirmation,
   type DonationConfirmationData,
+  type RefundNotificationData,
 } from "../../supabase/functions/_shared/donationEmail";
 
 const baseDonation: DonationConfirmationData = {
@@ -20,6 +26,18 @@ const baseDonation: DonationConfirmationData = {
   isAnonymous: false,
   completedAt: "2026-08-17T08:00:00.000Z",
   refundUrl: "https://missionpay.example/refund-request/mp1.refund.signature",
+  sandbox: true,
+};
+
+const baseRefund: RefundNotificationData = {
+  donationId: "donation-123",
+  donorName: "Avery Donor",
+  campaignTitle: "Clean Water for Rural Communities",
+  campaignUrl: "https://missionpay.example/campaigns/clean-water",
+  amountCents: 2500,
+  currency: "USD",
+  frequency: "one_time",
+  eventAt: "2026-08-19T08:00:00.000Z",
   sandbox: true,
 };
 
@@ -136,6 +154,71 @@ describe("donation confirmation email", () => {
       "payment_method_SECRET", "management_token_SECRET", "access_token_SECRET",
       "status_token_SECRET", "BREVO_API_SECRET_DO_NOT_LEAK",
     ]) expect(rendered).not.toContain(secret);
+  });
+});
+
+describe("refund lifecycle emails", () => {
+  it("confirms only receipt and pending review for a new refund request", () => {
+    const message = buildRefundRequestedEmail({ ...baseRefund, frequency: "monthly" });
+    expect(message.subject).toBe("[MissionPay Sandbox] Refund request received — Clean Water for Rural Communities");
+    expect(message.text).toContain("Status: Pending review");
+    expect(message.text).toContain("has not yet been approved");
+    expect(message.text).toContain("monthly donation remains active unless you cancel it separately");
+    expect(message.text).toContain("No real money moved");
+  });
+
+  it("separates admin approval from provider-confirmed completion", () => {
+    const approved = buildRefundApprovedEmail({ ...baseRefund, frequency: "monthly" });
+    expect(approved.text).toContain("has been approved. Your refund is being processed");
+    expect(approved.text).toContain("Status: Approved");
+    expect(approved.text).toContain("does not cancel future monthly donations");
+    expect(approved.text).not.toContain("payment provider has completed");
+    expect(approved.text).not.toContain("Status: Refund completed");
+
+    const completed = buildRefundCompletedEmail({ ...baseRefund, frequency: "monthly" });
+    expect(completed.text).toContain("Status: Refund completed");
+    expect(completed.text).toContain("This refunded only this charge");
+    expect(completed.text).toContain("No real money moved");
+  });
+
+  it("escapes an optional decline decision note without leaking unrelated fields", () => {
+    const message = buildRefundDeclinedEmail({
+      ...baseRefund,
+      decisionNote: `<script>alert("x")</script> Please contact support.`,
+      admin_email: "admin@internal.example",
+      provider_error: "issuer diagnostics",
+    } as RefundNotificationData);
+    expect(message.text).toContain("Status: Declined");
+    expect(message.html).toContain("&lt;script&gt;");
+    expect(message.html).not.toContain("<script>");
+    expect(`${message.html}${message.text}`).not.toContain("admin@internal.example");
+    expect(`${message.html}${message.text}`).not.toContain("issuer diagnostics");
+  });
+
+  it("renders provider completion wording only outside sandbox", () => {
+    const message = buildRefundCompletedEmail({ ...baseRefund, sandbox: false });
+    expect(message.text).toContain("payment provider has completed your refund");
+    expect(message.text).toContain("bank or card may need additional time");
+    expect(message.text).not.toContain("No real money moved");
+  });
+});
+
+describe("recurring cancellation email", () => {
+  it("stops future charges without claiming prior donations were refunded", () => {
+    const message = buildRecurringCancellationEmail({
+      donorName: "Avery Donor",
+      campaignTitle: "Clean Water for Rural Communities",
+      campaignUrl: "https://missionpay.example/campaigns/clean-water",
+      amountCents: 2500,
+      currency: "USD",
+      cancelledAt: "2026-08-19T08:00:00.000Z",
+      sandbox: true,
+    });
+    expect(message.subject).toContain("[MissionPay Sandbox] Monthly donation cancelled");
+    expect(message.text).toContain("No future automatic donations will be scheduled");
+    expect(message.text).toContain("does not refund donations that were already completed");
+    expect(message.text).toContain("Status: Cancelled");
+    expect(message.text).toContain("No real money moved");
   });
 });
 
@@ -256,6 +339,8 @@ describe("worker payment-state isolation", () => {
     expect(source.default).not.toContain("request.json");
     expect(source.default).not.toContain("VITE_BREVO");
     expect(source.default).toContain("idempotencyKey: delivery.id");
+    expect(source.default).toContain('delivery.notification_type === "recurring_cancelled"');
+    expect(source.default).toContain('refund?.status !== "succeeded"');
     expect(source.default).toContain('recurring.status === "pending"');
     expect(source.default).not.toContain('recurring?.status !== "active"');
   });

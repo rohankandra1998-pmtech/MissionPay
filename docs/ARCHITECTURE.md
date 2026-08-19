@@ -30,9 +30,9 @@ Supabase Cron + pg_net
        └─ creates a Hyperswitch off-session MIT
   └─ process-donation-emails
        ├─ atomically claims a bounded internal outbox batch
-       ├─ reads minimal confirmed MissionPay business data
-       ├─ signs an in-memory recurring management capability
-       └─ sends HTML + text confirmation ───────────> Brevo Transactional Email API
+       ├─ routes by authoritative notification type and scope
+       ├─ signs an in-memory recurring management capability for receipts
+       └─ sends HTML + text lifecycle messages ─────> Brevo Transactional Email API
 ```
 
 ## Frontend
@@ -66,7 +66,7 @@ Provider status derivation is payload-aware. A bare `requires_payment_method` is
 
 Verified webhooks still preserve their full event envelope in backend-only `payment_events.payload`; webhook objects may omit the expanded-attempt fields available from Retrieve Payment. This commit does not broaden event access or redesign event retention. Reconciliation always projects either input shape through the same sanitized failure-evidence extractor, and a later Retrieve Payment can replace a weaker webhook-derived snapshot.
 
-`donation_email_deliveries` is a backend-only outbox. The donation trigger inserts one row when a donation is inserted as `succeeded` or transitions into `succeeded`; migration installation does not touch historical rows. A unique `(donation_id, notification_type)` key makes repeated reconciliation idempotent. The worker claim RPC uses `FOR UPDATE SKIP LOCKED`, marks rows `sending`, and reclaims abandoned work after ten minutes. Once a row is `sent`, it is never automatically claimed again.
+`donation_email_deliveries` is a backend-only lifecycle outbox. Donation-scoped rows cover donation confirmation and refund request/approval/decline/completion; recurring cancellation rows reference the recurring plan directly. A scope check prevents mixed or missing identities, and partial unique indexes enforce one logical notification per entity/type. Triggers enqueue only authoritative inserts or status transitions and use conflict-safe inserts, so repeated submissions, reviews, webhooks, synchronization, cancellation, and cron runs cannot create duplicate logical deliveries. The worker claim RPC retains `FOR UPDATE SKIP LOCKED`, bounded batches, abandoned-send recovery, attempt counts, and backoff. Once a row is `sent`, it is never automatically claimed again.
 
 MissionPay's durable database controls remain the primary idempotency boundary. As a supplemental provider guard, each Brevo request includes the stable outbox delivery UUID as `headers.idempotencyKey`. Brevo documents a 30-minute TTL and rejects reuse within that window with `duplicate_parameter`; the same UUID is reused on retries. This provider window is useful but is not a replacement for the durable outbox.
 
@@ -102,9 +102,9 @@ Private trigger functions live in the unexposed `private` schema with an empty `
 - Recurring state updates are conditioned on the plan still being in the expected state, so reconciliation or an MIT result cannot reactivate or overwrite a concurrently cancelled plan.
 - Recurring schedules preserve the donor's anonymity choice and an immutable consent timestamp for every future occurrence.
 
-## Confirmation email security
+## Transactional email security
 
-Email delivery begins only at the database boundary where backend reconciliation changes a donation into `succeeded`. The worker selects the donor name/email, donation amount/currency/frequency/anonymity/completion time, campaign title/slug, donation ID, and—when monthly—the recurring status/next date. Dynamic HTML is escaped. It does not query `payment_events` or select card data, provider secrets, `client_secret`, payment-method references, access/management/status tokens, or raw provider responses. Donor email/name and rendered bodies are not logged or stored in the outbox.
+Email delivery begins only at database boundaries: donation success, refund-request creation, pending-to-approved/declined review, provider-confirmed refund success, or recurring cancellation. The worker selects only the minimum trusted donor, campaign, donation/refund, or recurring-plan fields required for that notification. Dynamic HTML is escaped, subjects are stripped of CR/LF, and optional decision notes never include admin identity or provider diagnostics. It does not query `payment_events` or select card data, provider secrets, `client_secret`, access/status tokens, or raw provider responses. Payment-method references are selected only for the unchanged confirmation readiness check and never rendered or logged. Donor email/name and rendered bodies are not logged or stored in the outbox.
 
 For each monthly receipt, the worker creates a `mp1.payload.signature` bearer capability using HMAC-SHA256 and the backend-only `DONATION_MANAGEMENT_LINK_SECRET`. Its payload contains only version, purpose, and recurring donation UUID. The raw capability exists only while rendering and sending the message; neither it nor the URL is stored or logged. `cancel-recurring-donation` verifies the Web Crypto HMAC before reading the plan. Existing checkout-generated opaque links remain valid through the original SHA-256 hash lookup, while dotted signed-token forms never fall back to legacy lookup.
 
@@ -112,18 +112,18 @@ A succeeded monthly donation is independently emailable from its plan's later li
 
 Browser and management responses expose only `recurring_payment_method_ready`; the actual Hyperswitch reference remains backend-only. The success and management pages require both `status = active` and readiness before advertising a future charge.
 
-Delivery failure updates only the outbox. It cannot roll back donation success, campaign metrics, supporter activity, or recurring payment reconciliation. Failed work retries with bounded exponential delays for at most five claimed attempts.
+Delivery failure updates only the outbox. It cannot roll back donation success, refund request/review, refund reconciliation, campaign metrics, supporter activity, or recurring cancellation. Failed work retries with bounded exponential delays for at most five claimed attempts.
 
 ## Deployment
 
-1. Apply the committed migration to the Supabase project.
-2. Configure Edge Function secrets and deploy payment functions plus `process-donation-emails`.
+1. Deploy the backward-compatible worker with `npx supabase functions deploy process-donation-emails --no-verify-jwt`.
+2. Then apply migrations in order with `npx supabase db push`; the lifecycle notification change is `20260819040000_add_donor_lifecycle_email_notifications.sql`. Worker-first rollout prevents the previous confirmation-only worker from claiming a newly introduced lifecycle type during the deployment gap.
 3. Configure the Hyperswitch profile webhook URL to `/functions/v1/hyperswitch-webhook` and ensure its signing key matches `HYPERSWITCH_WEBHOOK_SECRET`.
 4. Store project URL, publishable key, and `CRON_SECRET` in Supabase Vault; schedule `process-recurring-donations` with `pg_cron` and `pg_net`.
 5. Configure `BREVO_API_KEY`, `DONATION_MANAGEMENT_LINK_SECRET` (at least 32 random bytes), `MISSIONPAY_EMAIL_FROM_NAME`, `MISSIONPAY_EMAIL_FROM_ADDRESS`, and optional `MISSIONPAY_EMAIL_REPLY_TO` as Edge Function secrets. Register and verify that sender in Brevo first. The migration schedules the email worker with the existing Vault URL and cron secret.
 6. Configure the Vite public variables in Vercel and deploy the built application.
    The root `vercel.json` catch-all rewrite serves Vite's `index.html` for direct `BrowserRouter` routes, including payment return URLs, while React Router decides the application route.
-7. Run one-time, initial monthly, subsequent MIT, failure, duplicate-webhook, email confirmation, and cancellation golden paths.
+7. Run one-time, initial monthly, subsequent MIT, failure, duplicate-webhook, refund requested/approved/declined/completed email, and recurring cancellation golden paths.
 
 ```text
 First monthly donation → payment succeeds → reusable method confirmed → plan active → receipt + signed management link
@@ -133,7 +133,7 @@ First monthly donation → payment succeeds → reusable method confirmed → pl
 
 ## Deferred lifecycle work
 
-The schema already supports `refunded` donations and arbitrary payment event types. Refund initiation, partial refunds, dispute workflows, chargeback administration, dunning, multi-merchant settlement, KYB, and payouts remain intentionally deferred.
+The schema supports full admin-approved refunds and arbitrary payment event types. Partial refunds, dispute workflows, chargeback administration, dunning, multi-merchant settlement, KYB, and payouts remain intentionally deferred.
 
 ## Current references
 

@@ -16,10 +16,35 @@ export type DonationConfirmationData = {
   sandbox: boolean;
 };
 
-export type DonationConfirmationMessage = {
+export type TransactionalEmailMessage = {
   subject: string;
   html: string;
   text: string;
+};
+
+export type DonationConfirmationMessage = TransactionalEmailMessage;
+
+export type RefundNotificationData = {
+  donationId: string;
+  donorName: string;
+  campaignTitle: string;
+  campaignUrl: string;
+  amountCents: number;
+  currency: string;
+  frequency: "one_time" | "monthly";
+  eventAt: string;
+  decisionNote?: string | null;
+  sandbox: boolean;
+};
+
+export type RecurringCancellationData = {
+  donorName: string;
+  campaignTitle: string;
+  campaignUrl: string;
+  amountCents: number;
+  currency: string;
+  cancelledAt: string;
+  sandbox: boolean;
 };
 
 type TransactionalEmailConfig = {
@@ -32,7 +57,7 @@ type TransactionalEmailConfig = {
 type SendRequest = {
   to: string;
   toName: string;
-  message: DonationConfirmationMessage;
+  message: TransactionalEmailMessage;
   idempotencyKey: string;
 };
 
@@ -132,6 +157,118 @@ export function buildDonationConfirmationEmail(data: DonationConfirmationData): 
   return { subject, html, text: lines.join("\n") };
 }
 
+type LifecycleTemplate = {
+  heading: string;
+  intro: string;
+  status: string;
+  timestampLabel: string;
+  monthlyNotice?: string;
+  decisionNote?: string | null;
+  subject: string;
+};
+
+function sandboxNotice(sandbox: boolean) {
+  return sandbox
+    ? `<div style="margin:24px 0;padding:14px 16px;border-radius:10px;background:#fff4e8;color:#6b3b12"><strong>Sandbox transaction</strong><br>This was a sandbox/test transaction. No real money moved.</div>`
+    : "";
+}
+
+function buildRefundLifecycleEmail(data: RefundNotificationData, template: LifecycleTemplate): TransactionalEmailMessage {
+  const amount = formatAmount(data.amountCents, data.currency);
+  const greeting = escapeHtml(data.donorName.trim() || "Supporter");
+  const campaignTitle = escapeHtml(data.campaignTitle);
+  const campaignUrl = escapeHtml(data.campaignUrl);
+  const reference = escapeHtml(data.donationId);
+  const monthlyHtml = data.frequency === "monthly" && template.monthlyNotice
+    ? `<p style="color:#4d5358">${escapeHtml(template.monthlyNotice)}</p>`
+    : "";
+  const note = template.decisionNote?.trim();
+  const noteHtml = note
+    ? `<div style="margin:20px 0;padding:14px 16px;border-radius:10px;background:#f6f3ee"><strong>Decision note</strong><br>${escapeHtml(note)}</div>`
+    : "";
+  const subjectPrefix = data.sandbox ? "[MissionPay Sandbox] " : "";
+  const subject = safeSubject(`${subjectPrefix}${template.subject} — ${data.campaignTitle}`);
+  const html = `<!doctype html><html><body style="margin:0;background:#f6f3ee;color:#17211d;font-family:Arial,sans-serif"><div style="max-width:600px;margin:0 auto;padding:40px 20px"><div style="background:#fff;border-radius:16px;padding:32px"><p style="margin:0 0 24px;font-weight:700;color:#145c46">MissionPay</p><h1 style="margin:0 0 16px;font-size:28px">${escapeHtml(template.heading)}</h1><p>Hello ${greeting},</p><p>${escapeHtml(template.intro)}</p>${sandboxNotice(data.sandbox)}<table style="width:100%;margin:24px 0;border-collapse:collapse"><tr><td style="padding:7px 0;color:#687076">Campaign</td><td style="padding:7px 0;text-align:right;font-weight:600">${campaignTitle}</td></tr><tr><td style="padding:7px 0;color:#687076">Amount</td><td style="padding:7px 0;text-align:right;font-weight:600">${escapeHtml(amount)} ${escapeHtml(data.currency)}</td></tr><tr><td style="padding:7px 0;color:#687076">Status</td><td style="padding:7px 0;text-align:right;font-weight:600">${escapeHtml(template.status)}</td></tr><tr><td style="padding:7px 0;color:#687076">MissionPay reference</td><td style="padding:7px 0;text-align:right;font-family:monospace">${reference}</td></tr><tr><td style="padding:7px 0;color:#687076">${escapeHtml(template.timestampLabel)}</td><td style="padding:7px 0;text-align:right">${escapeHtml(formatTimestamp(data.eventAt))}</td></tr></table>${noteHtml}${monthlyHtml}<p style="margin:24px 0 0"><a href="${campaignUrl}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#17211d;color:#fff;text-decoration:none">View campaign</a></p></div></div></body></html>`;
+  const lines = [
+    "MissionPay", "", template.heading, "", `Hello ${data.donorName.trim() || "Supporter"},`, template.intro, "",
+    data.sandbox ? "SANDBOX TRANSACTION: This was a sandbox/test transaction. No real money moved." : "",
+    `Campaign: ${data.campaignTitle}`, `Amount: ${amount} ${data.currency}`, `Status: ${template.status}`,
+    `MissionPay reference: ${data.donationId}`, `${template.timestampLabel}: ${formatTimestamp(data.eventAt)}`,
+    note ? `Decision note: ${note}` : "",
+    data.frequency === "monthly" && template.monthlyNotice ? template.monthlyNotice : "",
+    `View campaign: ${data.campaignUrl}`,
+  ].filter((line) => line !== "");
+  return { subject, html, text: lines.join("\n") };
+}
+
+export function buildRefundRequestedEmail(data: RefundNotificationData) {
+  return buildRefundLifecycleEmail(data, {
+    heading: "Refund request received",
+    intro: "MissionPay received your refund request. It is pending review and has not yet been approved.",
+    status: "Pending review",
+    timestampLabel: "Requested",
+    monthlyNotice: "This refund request applies only to this completed charge. Your monthly donation remains active unless you cancel it separately.",
+    subject: "Refund request received",
+  });
+}
+
+export function buildRefundApprovedEmail(data: RefundNotificationData) {
+  return buildRefundLifecycleEmail(data, {
+    heading: "Refund request approved",
+    intro: "Your refund request has been approved. Your refund is being processed.",
+    status: "Approved",
+    timestampLabel: "Approved",
+    monthlyNotice: "This refund does not cancel future monthly donations.",
+    decisionNote: data.decisionNote,
+    subject: "Refund request approved",
+  });
+}
+
+export function buildRefundDeclinedEmail(data: RefundNotificationData) {
+  return buildRefundLifecycleEmail(data, {
+    heading: "Refund request declined",
+    intro: "MissionPay reviewed your refund request and it was declined. No refund has been initiated for this request.",
+    status: "Declined",
+    timestampLabel: "Decided",
+    monthlyNotice: "This decision does not change your monthly donation plan.",
+    decisionNote: data.decisionNote,
+    subject: "Refund request declined",
+  });
+}
+
+export function buildRefundCompletedEmail(data: RefundNotificationData) {
+  const intro = data.sandbox
+    ? "MissionPay completed this sandbox refund record. This was a test; no real money moved."
+    : "The payment provider has completed your refund. Your bank or card may need additional time to display the credit.";
+  return buildRefundLifecycleEmail(data, {
+    heading: "Refund completed",
+    intro,
+    status: "Refund completed",
+    timestampLabel: "Completed",
+    monthlyNotice: "This refunded only this charge. Future monthly donations remain scheduled unless you cancel the monthly donation separately.",
+    subject: "Refund completed",
+  });
+}
+
+export function buildRecurringCancellationEmail(data: RecurringCancellationData): TransactionalEmailMessage {
+  const amount = formatAmount(data.amountCents, data.currency);
+  const greeting = escapeHtml(data.donorName.trim() || "Supporter");
+  const title = escapeHtml(data.campaignTitle);
+  const campaignUrl = escapeHtml(data.campaignUrl);
+  const subjectPrefix = data.sandbox ? "[MissionPay Sandbox] " : "";
+  const subject = safeSubject(`${subjectPrefix}Monthly donation cancelled — ${data.campaignTitle}`);
+  const distinction = "Cancelling your monthly donation stops future automatic charges. It does not refund donations that were already completed.";
+  const html = `<!doctype html><html><body style="margin:0;background:#f6f3ee;color:#17211d;font-family:Arial,sans-serif"><div style="max-width:600px;margin:0 auto;padding:40px 20px"><div style="background:#fff;border-radius:16px;padding:32px"><p style="margin:0 0 24px;font-weight:700;color:#145c46">MissionPay</p><h1 style="margin:0 0 16px;font-size:28px">Monthly donation cancelled</h1><p>Hello ${greeting},</p><p>Your monthly donation to <strong>${title}</strong> has been cancelled. No future automatic donations will be scheduled from this recurring plan.</p>${sandboxNotice(data.sandbox)}<table style="width:100%;margin:24px 0;border-collapse:collapse"><tr><td style="padding:7px 0;color:#687076">Monthly amount</td><td style="padding:7px 0;text-align:right;font-weight:600">${escapeHtml(amount)} ${escapeHtml(data.currency)}</td></tr><tr><td style="padding:7px 0;color:#687076">Status</td><td style="padding:7px 0;text-align:right;font-weight:600">Cancelled</td></tr><tr><td style="padding:7px 0;color:#687076">Cancelled</td><td style="padding:7px 0;text-align:right">${escapeHtml(formatTimestamp(data.cancelledAt))}</td></tr></table><p style="color:#4d5358">${escapeHtml(distinction)}</p><p style="margin:24px 0 0"><a href="${campaignUrl}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#17211d;color:#fff;text-decoration:none">View campaign</a></p></div></div></body></html>`;
+  const lines = [
+    "MissionPay", "", "Monthly donation cancelled", "", `Hello ${data.donorName.trim() || "Supporter"},`,
+    `Your monthly donation to ${data.campaignTitle} has been cancelled. No future automatic donations will be scheduled from this recurring plan.`,
+    data.sandbox ? "SANDBOX TRANSACTION: This was a sandbox/test plan. No real money moved." : "",
+    `Monthly amount: ${amount} ${data.currency}`, "Status: Cancelled", `Cancelled: ${formatTimestamp(data.cancelledAt)}`,
+    distinction, `View campaign: ${data.campaignUrl}`,
+  ].filter((line) => line !== "");
+  return { subject, html, text: lines.join("\n") };
+}
+
 function validateServerHeader(value: string, label: string) {
   if (!value.trim() || /[\r\n]/.test(value)) throw new EmailConfigurationError(`${label}_invalid`);
 }
@@ -146,7 +283,7 @@ function validateUuid(value: string, label: string) {
   }
 }
 
-export async function sendDonationConfirmation(
+export async function sendTransactionalEmail(
   config: TransactionalEmailConfig,
   request: SendRequest,
   fetcher: typeof fetch = fetch,
@@ -191,6 +328,8 @@ export async function sendDonationConfirmation(
   }
   return { providerMessageId: payload.messageId };
 }
+
+export const sendDonationConfirmation = sendTransactionalEmail;
 
 export function safeDeliveryError(error: unknown) {
   if (error instanceof EmailProviderError || error instanceof EmailConfigurationError) return error.message.slice(0, 500);

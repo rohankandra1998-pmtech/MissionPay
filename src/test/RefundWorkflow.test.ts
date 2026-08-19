@@ -12,6 +12,7 @@ import {
   shouldApplyRefundUpdate,
   validateRefundDetails,
 } from "../../supabase/functions/_shared/refunds";
+import lifecycleEmailMigration from "../../supabase/migrations/20260819040000_add_donor_lifecycle_email_notifications.sql?raw";
 
 const requestId = "20000000-0000-4000-8000-000000000123";
 
@@ -108,5 +109,55 @@ describe("refund reconciliation", () => {
     expect(update).not.toHaveProperty("recurring_donation_id");
     expect(update).not.toHaveProperty("next_charge_at");
     expect(update).not.toHaveProperty("hyperswitch_payment_method_reference");
+  });
+});
+
+describe("database-driven donor lifecycle email enqueueing", () => {
+  it("adds every notification type while preserving donation confirmation", () => {
+    for (const type of [
+      "refund_requested", "refund_approved", "refund_declined", "refund_completed", "recurring_cancelled",
+    ]) expect(lifecycleEmailMigration).toContain(`add value if not exists '${type}'`);
+    expect(lifecycleEmailMigration).toContain("'donation_confirmation'");
+  });
+
+  it("queues one request email on insert and decision emails only on pending transitions", () => {
+    expect(lifecycleEmailMigration).toContain("if tg_op = 'INSERT' then");
+    expect(lifecycleEmailMigration).toContain("target_type := 'refund_requested'");
+    expect(lifecycleEmailMigration).toContain("old.status = 'pending' and new.status = 'approved'");
+    expect(lifecycleEmailMigration).toContain("target_type := 'refund_approved'");
+    expect(lifecycleEmailMigration).toContain("old.status = 'pending' and new.status = 'declined'");
+    expect(lifecycleEmailMigration).toContain("target_type := 'refund_declined'");
+  });
+
+  it("queues completion only from an authoritative refund succeeded transition", () => {
+    expect(lifecycleEmailMigration).toContain("create trigger enqueue_refund_completed_email_after_success");
+    expect(lifecycleEmailMigration).toMatch(/new\.status = 'succeeded'[\s\S]*old\.status is distinct from 'succeeded'[\s\S]*'refund_completed'/);
+    const requestTrigger = lifecycleEmailMigration.slice(
+      lifecycleEmailMigration.indexOf("private.enqueue_refund_request_email"),
+      lifecycleEmailMigration.indexOf("private.enqueue_refund_completed_email"),
+    );
+    expect(requestTrigger).not.toContain("refund_completed");
+  });
+
+  it("queues cancellation only on a non-cancelled to cancelled plan transition", () => {
+    expect(lifecycleEmailMigration).toContain("old.status is distinct from 'cancelled' and new.status = 'cancelled'");
+    expect(lifecycleEmailMigration).toContain("values (new.id, 'recurring_cancelled')");
+  });
+
+  it("uses durable per-scope uniqueness and conflict-safe inserts", () => {
+    expect(lifecycleEmailMigration).toContain("donation_email_deliveries_donation_type_unique");
+    expect(lifecycleEmailMigration).toContain("donation_email_deliveries_recurring_type_unique");
+    expect(lifecycleEmailMigration.match(/on conflict \(/g)).toHaveLength(4);
+    expect(lifecycleEmailMigration.match(/do nothing;/g)).toHaveLength(4);
+    expect(lifecycleEmailMigration).toContain("FOR UPDATE SKIP LOCKED".toLowerCase());
+    expect(lifecycleEmailMigration).toContain("delivery.attempt_count < 5");
+    expect(lifecycleEmailMigration).toContain("interval '10 minutes'");
+  });
+
+  it("enforces donation versus recurring-plan outbox scope", () => {
+    expect(lifecycleEmailMigration).toContain("donation_email_delivery_scope_matches_type");
+    expect(lifecycleEmailMigration).toContain("donation_id is not null");
+    expect(lifecycleEmailMigration).toContain("recurring_donation_id is not null");
+    expect(lifecycleEmailMigration).toContain("references public.recurring_donations(id)");
   });
 });
