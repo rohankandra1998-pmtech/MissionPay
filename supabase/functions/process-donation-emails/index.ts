@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { json } from "../_shared/cors.ts";
 import { adminClient } from "../_shared/database.ts";
 import { createManagementCapability } from "../_shared/managementCapability.ts";
+import { createRefundCapability } from "../_shared/refundCapability.ts";
 import { hasRecurringChargeCredentials } from "../_shared/recurring.ts";
 import {
   buildDonationConfirmationEmail,
@@ -34,6 +35,15 @@ function managementUrl(appUrl: string, token: string) {
   const url = new URL(appUrl);
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new EmailConfigurationError("app_url_invalid");
   url.pathname = `/manage-donation/${encodeURIComponent(token)}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function refundUrl(appUrl: string, token: string) {
+  const url = new URL(appUrl);
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new EmailConfigurationError("app_url_invalid");
+  url.pathname = `/refund-request/${encodeURIComponent(token)}`;
   url.search = "";
   url.hash = "";
   return url.toString();
@@ -78,9 +88,9 @@ Deno.serve(async (request) => {
       const emailFromName = Deno.env.get("MISSIONPAY_EMAIL_FROM_NAME") ?? "";
       const emailFromAddress = Deno.env.get("MISSIONPAY_EMAIL_FROM_ADDRESS") ?? "";
       if (!appUrl) throw new EmailConfigurationError("app_url_missing");
+      const linkSecret = Deno.env.get("DONATION_MANAGEMENT_LINK_SECRET") ?? "";
       let recurringManagementUrl: string | undefined;
       if (donation.frequency === "monthly" && recurring) {
-        const linkSecret = Deno.env.get("DONATION_MANAGEMENT_LINK_SECRET") ?? "";
         try {
           recurringManagementUrl = managementUrl(appUrl, await createManagementCapability(recurring.id, linkSecret));
         } catch {
@@ -101,6 +111,7 @@ Deno.serve(async (request) => {
         recurringPaymentMethodReady: Boolean(recurring && hasRecurringChargeCredentials(recurring)),
         nextChargeAt: recurring?.next_charge_at,
         managementUrl: recurringManagementUrl,
+        refundUrl: refundUrl(appUrl, await createRefundCapability(donation.id, linkSecret)),
         sandbox: (Deno.env.get("HYPERSWITCH_BASE_URL") ?? "").includes("sandbox"),
       });
       const result = await sendDonationConfirmation({

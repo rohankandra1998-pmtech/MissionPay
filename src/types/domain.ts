@@ -3,6 +3,9 @@ export type DonationStatus = "pending" | "processing" | "succeeded" | "failed" |
 export type DonationFrequency = "one_time" | "monthly";
 export type RecurringStatus = "pending" | "active" | "past_due" | "cancelled";
 export type PaymentFailureReason = "insufficient_funds" | "card_declined" | "lost_card" | "stolen_card" | "card_unavailable" | "authentication_failed" | "invalid_cvv" | "expired_card" | "invalid_card" | "payment_cancelled" | "session_expired" | "technical_error" | "unknown";
+export type RefundRequestReason = "incorrect_amount" | "duplicate" | "unauthorized" | "other";
+export type RefundRequestStatus = "pending" | "approved" | "declined";
+export type RefundStatus = "initiating" | "pending" | "review" | "succeeded" | "failed";
 
 export interface Campaign {
   id: string;
@@ -70,4 +73,43 @@ export interface PaymentSession {
   payment_id: string;
   client_secret: string;
   recurring_management_token?: string;
+}
+
+export interface RefundRequest {
+  id: string;
+  donation_id: string;
+  reason: RefundRequestReason;
+  details: string | null;
+  status: RefundRequestStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  decision_note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Refund {
+  id: string;
+  refund_request_id: string;
+  donation_id: string;
+  hyperswitch_refund_id: string;
+  hyperswitch_payment_id: string;
+  amount_cents: number;
+  currency: string;
+  provider_reason: "duplicate" | "fraudulent" | "requested_by_customer";
+  status: RefundStatus;
+  provider_updated_at: string | null;
+  error_code: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface RefundRequestView {
+  donation: Pick<Donation, "id" | "amount_cents" | "currency" | "frequency" | "status" | "created_at" | "completed_at"> & {
+    campaign: { title: string; slug: string };
+  };
+  eligibility: "eligible" | "ineligible" | "refunded";
+  refund_request: Pick<RefundRequest, "id" | "reason" | "details" | "status" | "decision_note" | "created_at" | "reviewed_at"> | null;
+  refund: Pick<Refund, "status" | "provider_updated_at" | "completed_at"> | null;
 }

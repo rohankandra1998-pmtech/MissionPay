@@ -19,6 +19,7 @@ const baseDonation: DonationConfirmationData = {
   frequency: "one_time",
   isAnonymous: false,
   completedAt: "2026-08-17T08:00:00.000Z",
+  refundUrl: "https://missionpay.example/refund-request/mp1.refund.signature",
   sandbox: true,
 };
 
@@ -33,6 +34,7 @@ describe("donation confirmation email", () => {
     expect(message.text).toContain("No real money moved");
     expect(message.text).not.toContain("Manage monthly donation");
     expect(message.html).not.toContain("manage-donation");
+    expect(message.text).toContain("Request a refund: https://missionpay.example/refund-request/mp1.refund.signature");
   });
 
   it("renders an active monthly occurrence and next charge date", () => {
@@ -50,6 +52,7 @@ describe("donation confirmation email", () => {
     expect(message.text).toContain("Next donation: Sep 17, 2026");
     expect(message.html).toContain("Manage monthly donation");
     expect(message.text).toContain("Manage monthly donation: https://missionpay.example/manage-donation/mp1.payload.signature");
+    expect(message.text).toContain("does not cancel future monthly donations");
   });
 
   it("renders a separate subsequent monthly receipt with its management link", () => {

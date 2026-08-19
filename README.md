@@ -13,6 +13,7 @@ MissionPay is a two-sided fundraising prototype for trustworthy campaign discove
 - Supabase Auth fundraiser signup/login, campaign draft/edit/publish, dashboard metrics, payment visibility, and recurring-support visibility
 - Versioned Postgres schema, RLS, explicit Data API grants, idempotent webhooks, and billing-period uniqueness
 - Backend-authoritative donation confirmation emails with an internal outbox, bounded retries, and Brevo transactional delivery
+- Donor-requested, platform-admin-approved full refunds with signed request links, Hyperswitch execution, webhook/retrieval reconciliation, and succeeded-only accounting
 - Meaningful seed data: five campaigns and successful donation rows that derive the primary demo’s $12,450 / 183 supporters
 
 ## Local setup
@@ -75,9 +76,11 @@ npx supabase functions deploy cancel-recurring-donation --no-verify-jwt
 npx supabase functions deploy process-recurring-donations --no-verify-jwt
 npx supabase functions deploy process-donation-emails --no-verify-jwt
 npx supabase functions deploy google-pay-diagnostic --no-verify-jwt
+npx supabase functions deploy refund-request --no-verify-jwt
+npx supabase functions deploy review-refund-request --no-verify-jwt
 ```
 
-These entry points disable the legacy platform JWT gate intentionally and implement their own controls: guest validation, random status/management capabilities, HMAC webhook authentication, or a dedicated cron secret. `process-donation-emails` accepts no recipient or message input and is not a general email relay.
+These entry points disable the legacy platform JWT gate intentionally and implement their own controls: guest validation, random status capabilities, purpose-scoped signed management/refund capabilities, authenticated-user plus database-backed platform-admin checks, HMAC webhook authentication, or a dedicated cron secret. `process-donation-emails` accepts no recipient or message input and is not a general email relay.
 
 ## Hyperswitch setup
 
@@ -101,7 +104,7 @@ Supabase’s current recommended hosted architecture combines Cron (`pg_cron`) a
 
 The donation-email migration schedules `/functions/v1/process-donation-emails` every minute with the same protected Vault credential. A database trigger queues only donations that newly enter `succeeded` after the migration is installed; it does not backfill historical successes. The worker derives the recipient from current trusted donor state, reads only donation/campaign business fields, renders HTML and text, and sends through Brevo's Transactional Email API. Configure `BREVO_API_KEY`, `DONATION_MANAGEMENT_LINK_SECRET`, `MISSIONPAY_EMAIL_FROM_NAME`, and `MISSIONPAY_EMAIL_FROM_ADDRESS` only as Supabase Edge Function secrets. `MISSIONPAY_EMAIL_REPLY_TO` is optional.
 
-Set `DONATION_MANAGEMENT_LINK_SECRET` to a cryptographically random value of at least 32 bytes. It is a backend-only HMAC key used only while recurring-management links are rendered; it must never use a `VITE_` prefix, enter Postgres, or be logged. Configure it with a securely generated value:
+Set `DONATION_MANAGEMENT_LINK_SECRET` to a cryptographically random value of at least 32 bytes. It is a backend-only HMAC key used while purpose-separated recurring-management and refund-request links are rendered; a token for one purpose cannot authorize the other. It must never use a `VITE_` prefix, enter Postgres, or be logged. Configure it with a securely generated value:
 
 ```bash
 npx supabase secrets set DONATION_MANAGEMENT_LINK_SECRET=...
@@ -112,6 +115,53 @@ For the zero-cost prototype, create or sign in to Brevo, create an API key for t
 After configuring the secrets, deploy the changed `process-donation-emails` and `cancel-recurring-donation` functions, then create a new sandbox donation using the intended donor inbox. Verify the donation is `succeeded`, one outbox row is claimed and marked `sent`, Brevo accepted it, and the donor actually received it. Do not requeue exhausted pre-Brevo rows or backfill historical donations for this test.
 
 Email delivery is independent of payment state: missing configuration, provider outages, or delivery failures leave the donation succeeded and affect only the outbox. Transient failures are retryable within the bounded worker policy. Sandbox confirmations identify themselves as tests and state that no real money moved.
+
+## Admin-approved refunds
+
+The refund lifecycle separates authorization from financial completion:
+
+```text
+Donor request
+→ platform admin review
+→ Hyperswitch full refund
+→ verified webhook or server-side retrieval reconciliation
+→ donation refunded
+```
+
+The donor can request from the successful-payment page or successful-donation email without an account. Both links use the same HMAC-signed `request_refund` capability for the donation. Possession permits preview and one request only; it cannot approve a request or call Hyperswitch.
+
+Platform admins use `/admin/refunds`. Every privileged function call authenticates the Supabase user and independently checks `platform_admins`; fundraiser access does not imply platform-admin access. Fundraisers only observe the eventual `refunded` donation. Only provider-confirmed refund success changes `donations.status` from `succeeded` to `refunded`, so existing succeeded-only metrics and public supporter activity update naturally.
+
+For monthly giving, `refund current charge ≠ cancel recurring plan`. Refund code does not update the recurring plan, payment method, billing anchor, status, or next charge. The management/cancellation flow remains the only way to stop future monthly donations.
+
+### Sandbox platform-admin bootstrap
+
+After applying the migration, create or sign in as the intended sandbox admin and run this once through trusted Supabase SQL/admin tooling. Keep the placeholder until execution time:
+
+```sql
+insert into public.platform_admins (user_id)
+select id
+from auth.users
+where lower(email) = lower('<ADMIN_EMAIL>')
+on conflict (user_id) do nothing;
+```
+
+Normal clients have no insert/update/delete grant on `platform_admins`; RLS lets an authenticated user read only their own membership row.
+
+### Refund deployment and sandbox verification
+
+This repository change does not apply or deploy anything. After review:
+
+1. Apply `20260819013026_add_admin_approved_refunds.sql` to the intended sandbox project.
+2. Deploy changed functions `payment-status`, `hyperswitch-webhook`, `process-donation-emails`, and new functions `refund-request` and `review-refund-request` using `supabase/config.toml`.
+3. Verify `HYPERSWITCH_API_KEY`, `HYPERSWITCH_BASE_URL`, `HYPERSWITCH_WEBHOOK_SECRET`, `APP_URL`, and the existing 32+ byte `DONATION_MANAGEMENT_LINK_SECRET` are configured only as Edge Function secrets.
+4. Add sandbox admin membership with the placeholder SQL above.
+5. Verify `refund_succeeded` and `refund_failed` reach the existing signed Hyperswitch webhook endpoint.
+6. Complete a successful one-time sandbox payment, request from the app, approve in `/admin/refunds`, and confirm provider success changes the donation to `refunded` and updates succeeded-only totals/activity.
+7. Complete another successful donation and submit from the email link on another device/browser.
+8. Refund one monthly installment and confirm its recurring plan remains active with the same next charge, billing anchor, and saved payment method.
+
+Do not represent the flow as end-to-end sandbox validated until these steps have actually been observed against Hyperswitch and the deployed Supabase project.
 
 ## Verification
 

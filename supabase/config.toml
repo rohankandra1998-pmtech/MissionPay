@@ -20,3 +20,9 @@ verify_jwt = false
 
 [functions.google-pay-diagnostic]
 verify_jwt = false
+
+[functions.refund-request]
+verify_jwt = false
+
+[functions.review-refund-request]
+verify_jwt = false

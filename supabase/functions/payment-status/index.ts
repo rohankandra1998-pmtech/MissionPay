@@ -5,6 +5,7 @@ import { adminClient } from "../_shared/database.ts";
 import { claimFailureEnrichment, completeFailureEnrichment, releaseFailureEnrichment } from "../_shared/failureEnrichment.ts";
 import { retrievePayment } from "../_shared/hyperswitch.ts";
 import { isPaymentFailureReason } from "../_shared/paymentFailure.ts";
+import { createRefundCapability } from "../_shared/refundCapability.ts";
 import { reconcilePayment } from "../_shared/reconcile.ts";
 import { hasRecurringChargeCredentials } from "../_shared/recurring.ts";
 
@@ -68,6 +69,17 @@ Deno.serve(async (request) => {
     const recurring = Array.isArray(current?.recurring) ? current?.recurring[0] : current?.recurring;
     const recurringPaymentMethodReady = Boolean(recurring && hasRecurringChargeCredentials(recurring));
     const recurringChargeable = recurring?.status === "active" && recurringPaymentMethodReady;
+    const { data: refundRequest } = current ? await admin.from("refund_requests").select("status").eq("donation_id", donationId).maybeSingle() : { data: null };
+    const { data: refund } = current ? await admin.from("refunds").select("status").eq("donation_id", donationId).maybeSingle() : { data: null };
+    let refundUrl: string | undefined;
+    if (current?.hyperswitch_payment_id && ["succeeded", "refunded"].includes(current.status)) {
+      const capability = await createRefundCapability(current.id, Deno.env.get("DONATION_MANAGEMENT_LINK_SECRET") ?? "");
+      const url = new URL(Deno.env.get("APP_URL") ?? "http://localhost:5173");
+      url.pathname = `/refund-request/${encodeURIComponent(capability)}`;
+      url.search = "";
+      url.hash = "";
+      refundUrl = url.toString();
+    }
     return json(request, {
       id: current?.id,
       campaign_id: current?.campaign_id,
@@ -84,6 +96,9 @@ Deno.serve(async (request) => {
       recurring_status: recurring?.status,
       recurring_payment_method_ready: recurringPaymentMethodReady,
       next_charge_at: recurringChargeable ? recurring?.next_charge_at : undefined,
+      refund_url: refundUrl,
+      refund_request_status: refundRequest?.status,
+      refund_status: refund?.status,
       failure,
     });
   } catch (error) {
