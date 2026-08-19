@@ -15,6 +15,12 @@ MissionPay donation states are centralized as `pending → processing → succee
 7. The result is reconciled by a verified webhook and, as a recovery path, by `payment-status` retrieving the provider payment with `force_sync=true&expand_attempts=true`.
 8. Only `succeeded` donation rows affect metrics.
 
+## Wallet scope and Apple Pay readiness
+
+Hyperswitch Unified Checkout owns wallet presentation according to account configuration and device/browser eligibility. MissionPay’s end-to-end validated demo scope covers cards and Google Pay.
+
+Apple Pay Web Domain setup was explored and its required association file is retained at `public/.well-known/apple-developer-merchantid-domain-association`. This preserves the domain-verification groundwork for future enablement, while Apple Pay remains intentionally outside the validated prototype scope because compatible Apple Pay hardware was not available. Completing it is a configuration and end-to-end validation follow-up, not an already-tested payment path.
+
 ## Monthly CIT and setup
 
 1. Monthly is a separate, equally visible frequency. One-time remains the default.

@@ -89,6 +89,12 @@ https://YOUR_PROJECT_REF.supabase.co/functions/v1/hyperswitch-webhook
 
 Use the profile’s payment response hash key as `HYPERSWITCH_WEBHOOK_SECRET`. Enable the intended card connector and only enable wallets that the account/browser can actually use; Unified Checkout handles capability display.
 
+### Wallet support
+
+MissionPay’s validated demo payment methods are cards and Google Pay. Unified Checkout owns wallet presentation based on account, device, and browser eligibility, and the demonstrated scope intentionally includes only payment paths exercised end-to-end.
+
+Apple Pay Web Domain verification groundwork has been completed through Hyperswitch. The required association artifact is retained at `public/.well-known/apple-developer-merchantid-domain-association`, leaving the repository prepared for later enablement. Apple Pay is intentionally excluded from the validated demo scope because compatible Apple Pay hardware was not available for end-to-end testing; it is not presented as production-ready.
+
 ## Scheduler
 
 Supabase’s current recommended hosted architecture combines Cron (`pg_cron`) and `pg_net`. The committed scheduler migration stores no credentials; it reads the project URL and dedicated cron credential from Vault and posts to `/functions/v1/process-recurring-donations` daily at 08:15 UTC. Do not place the Hyperswitch API key in the cron job.
