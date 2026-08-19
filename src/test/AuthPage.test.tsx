@@ -37,6 +37,11 @@ describe("fundraiser authentication", () => {
     signInWithPassword.mockReset();
   });
 
+  it.each(["login", "signup"] as const)("renders predictable back navigation in %s mode", (mode) => {
+    renderAuth(mode);
+    expect(screen.getByRole("link", { name: "Back to MissionPay" })).toHaveAttribute("href", "/");
+  });
+
   it("rejects mismatched signup passwords before invoking Supabase", async () => {
     renderAuth("signup");
     completeSignup("missionpay1", "missionpay2");
@@ -59,6 +64,24 @@ describe("fundraiser authentication", () => {
         emailRedirectTo: `${window.location.origin}/dashboard`,
       },
     });
+  });
+
+  it("keeps Organization (optional) as the accessible field label", () => {
+    renderAuth("signup");
+    expect(screen.getByRole("textbox", { name: "Organization (optional)" })).toHaveAttribute("autocomplete", "organization");
+  });
+
+  it("continues the existing login flow", async () => {
+    signInWithPassword.mockResolvedValue({ error: null });
+    renderAuth("login");
+    fireEvent.change(screen.getByLabelText("Email address"), { target: { value: "maya@example.com" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "missionpay1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => expect(signInWithPassword).toHaveBeenCalledWith({
+      email: "maya@example.com",
+      password: "missionpay1",
+    }));
   });
 
   it("does not render confirm password on login", () => {
